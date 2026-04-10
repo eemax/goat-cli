@@ -1,0 +1,17 @@
+name = "coder"
+description = "General coding agent"
+default_model = "gpt-5.4-mini"
+default_effort = "medium"
+max_output_tokens = "12k"
+compact_at_tokens = "180k"
+run_timeout = "2h"
+enabled_tools = [
+  "bash",
+  "read_file",
+  "write_file",
+  "replace_in_file",
+  "apply_patch",
+  "glob",
+  "grep",
+]
+system_prompt_file = "./coder.md"

@@ -1,0 +1,38 @@
+[defaults]
+agent = "coder"
+
+[provider]
+kind = "openai_responses"
+transport = "http"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+timeout = "45s"
+
+[runtime]
+max_stdin = "8mb"
+run_timeout = "2h"
+
+[compaction]
+raw_history_budget_pct = 0.20
+
+[artifacts]
+preview_limit = "50kb"
+catastrophic_output_limit = "16mb"
+
+[tools]
+default_shell = "/bin/bash"
+default_shell_args = ["-lc"]
+max_output_chars = "200k"
+max_file_size = "1mb"
+
+[tools.web_search]
+enabled = false
+api_key_env = "EXA_API_KEY"
+
+[tools.web_fetch]
+enabled = false
+block_private_hosts = true
+
+[tools.subagents]
+enabled = false
+default_model = "gpt-5.4-mini"

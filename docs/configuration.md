@@ -1,0 +1,248 @@
+# Configuration
+
+## Resolution model
+
+Goat resolves configuration from exactly two roots:
+
+1. **Repo root** -- nearest ancestor of the working directory containing `goat.toml` or `.goat`
+2. **Home root** -- `~/.goat/`
+
+The effective config is built in this order (later overrides earlier):
+
+1. Home root
+2. Repo root
+3. Environment variable fallbacks
+4. Explicit CLI flags
+
+`--cwd` affects tool execution only. It does not affect root discovery or definition resolution.
+
+## Directory structure
+
+### Repo root
+
+```
+goat.toml           Global config
+models.toml         Model catalog
+agents/             Agent definitions
+roles/              Role definitions
+prompts/            Prompt definitions
+skills/             Reserved for future use
+```
+
+### Home root
+
+```
+~/.goat/
+  goat.toml         Global config
+  models.toml       Model catalog
+  agents/           Agent definitions
+  roles/            Role definitions
+  prompts/          Prompt definitions
+  skills/           Reserved
+  sessions/         Session storage (default location)
+```
+
+## Merge semantics
+
+**Global config** (`goat.toml`): deep-merge by section. Scalars: repo overrides home. Arrays: repo replaces home. Objects: merge recursively. Unknown keys fail validation.
+
+**Definitions** (agents, roles, prompts): repo definitions shadow home definitions with the same name. List commands show the resolved set without duplicates.
+
+**Model catalog** (`models.toml`): merge by canonical `id`. Repo entries override home entries for the same ID. Alias collisions across layers are resolved in favor of repo. Collisions within the same layer are validation errors.
+
+## goat.toml reference
+
+### `[paths]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `sessions_dir` | string | `~/.goat/sessions/` | Root directory for session storage |
+
+Path resolution: `~` resolves from home. `.` resolves from repo root. Relative paths resolve from the containing `goat.toml`.
+
+### `[defaults]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `agent` | string | -- | Fallback agent for unbound runs |
+
+### `[provider]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `kind` | enum | `openai_responses` | Provider adapter (V1: `openai_responses` only) |
+| `transport` | enum | `http` | Transport adapter (V1: `http` only) |
+| `base_url` | string | `https://api.openai.com/v1` | Provider base URL |
+| `api_key` | string | -- | Explicit API key |
+| `api_key_env` | string | `OPENAI_API_KEY` | Environment variable for API key |
+| `timeout` | duration | `45s` | Per-request provider timeout |
+
+Credential precedence: `api_key` > env var named by `api_key_env` > `OPENAI_API_KEY`.
+
+### `[runtime]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `max_stdin` | size | `8mb` | Hard limit for stdin payload |
+| `run_timeout` | duration | `2h` | Total wall-clock run timeout |
+
+### `[compaction]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `model` | string | -- | Model for compaction runs (falls back to `defaults.agent` model) |
+| `raw_history_budget_pct` | float | `0.20` | Max fraction of durable raw history after compaction |
+| `prompt_file` | string | -- | Override for built-in compaction prompt |
+
+When `model` is unset, compaction uses the default agent's model. Effort and output limits are taken from the model's registry entry. `prompt_file` resolves relative to the `goat.toml` that defines it.
+
+### `[artifacts]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `preview_limit` | size | `50kb` | Inline preview size before artifact spillover |
+| `catastrophic_output_limit` | size | `16mb` | Emergency cap for oversized payloads |
+
+### `[tools]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `default_shell` | string | `/bin/bash` | Shell for `bash` tool |
+| `default_shell_args` | string[] | `["-lc"]` | Shell arguments |
+| `max_output_chars` | size | `200k` | Tool output truncation boundary |
+| `max_file_size` | size | `1mb` | File-size cap for file/patch tools |
+
+### `[tools.web_search]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable web search (stub in V1) |
+| `api_key_env` | string | `EXA_API_KEY` | Exa API key env var |
+
+### `[tools.web_fetch]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable web fetch (stub in V1) |
+| `block_private_hosts` | bool | `true` | Block private-network targets |
+
+### `[tools.subagents]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable subagents (stub in V1) |
+| `default_model` | string | `gpt-5.4-mini` | Default subagent model |
+
+## models.toml
+
+The model catalog maps canonical model IDs to provider-specific details.
+
+```toml
+[[models]]
+id = "gpt-5.4-mini"
+provider = "openai_responses"
+provider_model = "gpt-5.4-mini"
+aliases = ["mini"]
+context_window = "400k"
+max_output_tokens = "128k"
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | yes | Canonical model ID |
+| `provider` | enum | no | Provider adapter (default: `openai_responses`) |
+| `provider_model` | string | no | Name sent to provider (default: same as `id`) |
+| `aliases` | string[] | no | Short names for `--model` and agent configs |
+| `context_window` | tokens | no | Context window size |
+| `max_output_tokens` | tokens | no | Max output tokens |
+
+Model IDs must be unique. Aliases must be unique within a precedence layer. Resolution: `--model` and agent `default_model` resolve against `id` or alias.
+
+## Agent files
+
+Location: `<root>/agents/<name>.toml` with an accompanying system prompt file.
+
+```toml
+name = "coder"
+description = "General coding agent"
+default_model = "gpt-5.4-mini"
+default_effort = "medium"
+max_output_tokens = "12k"
+compact_at_tokens = "180k"
+run_timeout = "2h"
+enabled_tools = [
+  "bash", "read_file", "write_file",
+  "replace_in_file", "apply_patch",
+  "glob", "grep",
+]
+system_prompt_file = "./coder.md"
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Agent name |
+| `default_model` | string | yes | Must resolve through models.toml |
+| `enabled_tools` | string[] | yes | At least one recognized tool ID |
+| `system_prompt` or `system_prompt_file` | string | yes (one) | Inline or file-based system prompt |
+| `description` | string | no | Human-readable description |
+| `default_effort` | enum | no | Default reasoning effort |
+| `max_output_tokens` | tokens | no | Output token cap (default: 12k) |
+| `compact_at_tokens` | tokens | no | Compaction budget (default: 180k) |
+| `run_timeout` | duration | no | Inherits from `runtime.run_timeout` |
+
+`system_prompt_file` resolves relative to the agent file. Unknown `enabled_tools` entries fail validation.
+
+## Role files
+
+Location: `<root>/roles/<name>.toml` with an accompanying prompt file.
+
+```toml
+name = "auditor"
+description = "Code review overlay"
+system_prompt_file = "./auditor.md"
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Role name |
+| `system_prompt` or `system_prompt_file` | string | yes (one) | Prompt text |
+| `description` | string | no | Description |
+
+Roles are sticky system-prompt overlays appended after the agent prompt.
+
+## Prompt files
+
+Location: `<root>/prompts/<name>.toml` with an accompanying text file.
+
+```toml
+name = "repo-summary"
+description = "Summarize the repository before changing anything"
+text_file = "./repo-summary.md"
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Prompt name |
+| `text` or `text_file` | string | yes (one) | Prompt text |
+| `description` | string | no | Description |
+
+Prompts are one-turn user-message prefixes. They are never sticky.
+
+## Runtime precedence
+
+Effective run values resolve in this order:
+
+1. Explicit CLI flags
+2. Stored sticky session settings
+3. Agent defaults
+4. Global defaults
+
+`--prompt` and `--plan` are excluded from sticky precedence (run-local only).
+
+## Unit formats
+
+Goat config values accept human-readable units:
+
+- **Duration**: `45s`, `2h`, `500ms`
+- **Size**: `8mb`, `50kb`, `1gb`
+- **Tokens**: `4k`, `128k`, `180000`

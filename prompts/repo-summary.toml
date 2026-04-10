@@ -1,0 +1,3 @@
+name = "repo-summary"
+description = "Summarize the repository before changing anything"
+text_file = "./repo-summary.md"

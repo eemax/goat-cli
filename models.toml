@@ -1,0 +1,15 @@
+[[models]]
+id = "gpt-5.4-mini"
+provider = "openai_responses"
+provider_model = "gpt-5.4-mini"
+aliases = ["mini"]
+context_window = "400k"
+max_output_tokens = "128k"
+
+[[models]]
+id = "gpt-5.3-codex"
+provider = "openai_responses"
+provider_model = "gpt-5.3-codex"
+aliases = ["codex"]
+context_window = "400k"
+max_output_tokens = "128k"
