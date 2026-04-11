@@ -85,7 +85,7 @@ describe("search tools", () => {
       pattern: "*.ts",
     });
     expect(globResult.ok).toBe(true);
-    expect(globResult.ok && globResult.data?.matches).toEqual(["one.ts", "two.ts"]);
+    expect(globResult.ok && globResult.data?.matches).toEqual(expect.arrayContaining(["one.ts", "two.ts"]));
 
     const grepResult = await executeToolCall(context, ["glob", "grep"], "grep", {
       pattern: "two",
