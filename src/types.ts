@@ -10,6 +10,19 @@ export type DoctorCheckStatus = "PASS" | "FAIL" | "SKIP";
 
 export type ToolAccessClass = "read_only" | "mutating";
 
+/**
+ * JSON shape of a function-tool definition as sent to the OpenAI Responses API.
+ * Produced by `exportProviderTools` and consumed by the agent loop / provider
+ * request construction.
+ */
+export type ProviderTool = {
+  type: "function";
+  name: string;
+  description: string;
+  strict: true;
+  parameters: Record<string, unknown>;
+};
+
 export type ToolEnvelope =
   | {
       ok: true;

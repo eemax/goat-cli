@@ -1,28 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { AgentLoopError, runAgentLoop } from "../src/agent.js";
-import { ArtifactStore } from "../src/artifacts.js";
 import { exportProviderTools } from "../src/harness.js";
 import type { ProviderClient, ProviderRequest, ProviderTurnResult } from "../src/provider.js";
-import { createTempDir, FakeProvider, testToolsConfig, useCleanup } from "./helpers.js";
+import { createToolContextFixture, FakeProvider, useCleanup } from "./helpers.js";
 
 const { track } = useCleanup();
 
 async function createToolContext() {
-  const runRoot = await createTempDir("goat-agent-");
-  track(runRoot);
-  const cwd = join(runRoot, "workspace");
-  await mkdir(cwd, { recursive: true });
-  return {
-    cwd,
-    planMode: false,
-    config: testToolsConfig,
+  return createToolContextFixture({
+    tempPrefix: "goat-agent-",
+    track,
     catastrophicOutputLimit: 1024,
-    artifacts: new ArtifactStore(join(runRoot, "artifacts")),
-    runRoot,
-    ensureMutationLock: async () => undefined,
-  };
+  });
 }
 
 describe("runAgentLoop", () => {

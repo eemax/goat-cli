@@ -1,7 +1,7 @@
 import type { Readable, Writable } from "node:stream";
 import { AgentLoopError, runAgentLoop } from "./agent.js";
 import { ArtifactStore } from "./artifacts.js";
-import { createDebugSink, debugErrorData } from "./debug.js";
+import { createDebugSink, type DebugSink, debugErrorData } from "./debug.js";
 import { ExitCode, GoatError, sessionConflictError, timeoutError } from "./errors.js";
 import { exportProviderTools, type ToolContext } from "./harness.js";
 import { formatError, writeText } from "./io.js";
@@ -10,10 +10,12 @@ import { OpenAIResponsesProvider } from "./provider.js";
 import {
   appendJsonlRecord,
   buildReplayRecords,
+  buildRunSummary,
   commitRun,
   persistProviderFailureRecord,
   persistProviderRecords,
   persistTranscript,
+  type RunSummaryInputs,
   runStatusFromError,
   terminationReasonFromError,
   unwrapRunError,
@@ -21,9 +23,20 @@ import {
 } from "./run-persist.js";
 import { type PreparedRun, prepareRunExecution } from "./run-prepare.js";
 import type { CommandOutput, RuntimeDeps } from "./runtime-context.js";
-import { acquireLock, createRunDirectory, type LockHandle, loadSessionMeta, newId, sessionPaths } from "./session.js";
+import {
+  acquireLock,
+  createRunDirectory,
+  type LockHandle,
+  loadSessionMeta,
+  newId,
+  type RunPaths,
+  sessionPaths,
+} from "./session.js";
 import type { Command, RunSummary, TranscriptRecord } from "./types.js";
 import { nowIso } from "./utils.js";
+
+type RunCommand = Extract<Command, { kind: "run" }>;
+type LockState = { executionLock: LockHandle | null };
 
 function createProviderFactory(
   deps?: RuntimeDeps,
@@ -31,8 +44,142 @@ function createProviderFactory(
   return deps?.createProvider ?? ((config) => new OpenAIResponsesProvider(config));
 }
 
+/**
+ * Build the tool context for a run. The mutation lock is acquired lazily —
+ * we only take it the first time a mutating tool is actually invoked so that
+ * read-only runs never contend for the execution lock.
+ */
+function createToolContext(params: {
+  command: RunCommand;
+  prepared: PreparedRun;
+  artifactStore: ArtifactStore;
+  runRoot: string;
+  abortSignal: AbortSignal;
+}): { toolContext: ToolContext; lockState: LockState } {
+  const { command, prepared, artifactStore, runRoot, abortSignal } = params;
+  const { context, sessionMeta, effectiveCwd } = prepared;
+  const lockState: LockState = { executionLock: null };
+
+  const toolContext: ToolContext = {
+    cwd: effectiveCwd,
+    planMode: command.options.plan,
+    config: context.config.tools,
+    catastrophicOutputLimit: context.config.artifacts.catastrophic_output_limit,
+    artifacts: artifactStore,
+    runRoot,
+    abortSignal,
+    ensureMutationLock: async () => {
+      if (command.options.plan || lockState.executionLock) {
+        return;
+      }
+      lockState.executionLock = await acquireLock(
+        sessionPaths(context.config.paths.sessions_dir, sessionMeta.session_id).executionLock,
+      );
+      const fresh = await loadSessionMeta(context.config.paths.sessions_dir, sessionMeta.session_id);
+      if (fresh.revision !== sessionMeta.revision) {
+        await lockState.executionLock.release();
+        lockState.executionLock = null;
+        throw sessionConflictError(`session \`${sessionMeta.session_id}\` changed before the first mutating tool`);
+      }
+    },
+  };
+
+  return { toolContext, lockState };
+}
+
+/**
+ * Write the `run_started` transcript record plus the initial user message(s).
+ *
+ * Kept separate from the main orchestration so the record shape lives in one
+ * place; once the run commits these are the entries a reader can use to
+ * reconstruct what was sent to the provider on turn 1.
+ */
+async function writeInitialTranscript(params: {
+  runDir: RunPaths;
+  runId: string;
+  prepared: PreparedRun;
+  command: RunCommand;
+}): Promise<void> {
+  const { runDir, runId, prepared, command } = params;
+  const { sessionMeta, agent, role, modelId, effort, effectiveCwd, prompt, stdinText } = prepared;
+
+  const runStartedRecord: TranscriptRecord = {
+    v: 1,
+    ts: nowIso(),
+    kind: "run_started",
+    run_id: runId,
+    session_id: sessionMeta.session_id,
+    run_kind: "prompt",
+    agent_name: agent.name,
+    role_name: role?.name ?? null,
+    model: modelId,
+    effort,
+    plan_mode: command.options.plan,
+    cwd: effectiveCwd,
+  };
+  await appendJsonlRecord(runDir.transcript, runStartedRecord);
+  await appendJsonlRecord(runDir.transcript, {
+    v: 1,
+    ts: nowIso(),
+    kind: "message",
+    run_id: runId,
+    role: "user",
+    content: prompt ? `${prompt.text}\n\n${command.message}` : command.message,
+  });
+  if (stdinText !== null) {
+    await appendJsonlRecord(runDir.transcript, {
+      v: 1,
+      ts: nowIso(),
+      kind: "message",
+      run_id: runId,
+      role: "user",
+      content: stdinText,
+    });
+  }
+}
+
+/**
+ * Emit the debug events + transcript + summary that terminate a run. Used by
+ * both the success and failure paths so the terminal audit trail stays
+ * consistent.
+ */
+async function finalizeRun(params: {
+  runDir: RunPaths;
+  runId: string;
+  sessionId: string;
+  summary: RunSummary;
+  debug: DebugSink;
+  failureError?: unknown;
+}): Promise<void> {
+  const { runDir, runId, sessionId, summary, debug, failureError } = params;
+  await appendJsonlRecord(runDir.transcript, {
+    v: 1,
+    ts: nowIso(),
+    kind: "run_finished",
+    run_id: runId,
+    status: summary.status,
+    termination_reason: summary.termination_reason,
+  });
+  await writeSummary(runDir.summary, summary);
+  if (failureError !== undefined) {
+    await debug.emit("error", "run_failed", {
+      run_id: runId,
+      session_id: sessionId,
+      ...debugErrorData(failureError),
+    });
+  }
+  await debug.emit("run", "finished", {
+    run_id: runId,
+    session_id: sessionId,
+    status: summary.status,
+    termination_reason: summary.termination_reason,
+    duration_s: summary.duration_s,
+    usage: summary.usage,
+  });
+}
+
 export async function executeRunCommand(
-  command: Extract<Command, { kind: "run" }>,
+  command: RunCommand,
   stdin: Readable,
   stderr: Writable,
   deps?: RuntimeDeps,
@@ -78,66 +225,29 @@ export async function executeRunCommand(
   );
   let observedUsage: RunSummary["usage"] = null;
 
-  const lockState: { executionLock: LockHandle | null } = {
-    executionLock: null,
-  };
-  const toolContext: ToolContext = {
-    cwd: effectiveCwd,
-    planMode: command.options.plan,
-    config: context.config.tools,
-    catastrophicOutputLimit: context.config.artifacts.catastrophic_output_limit,
-    artifacts: artifactStore,
+  const { toolContext, lockState } = createToolContext({
+    command,
+    prepared,
+    artifactStore,
     runRoot: runDir.root,
     abortSignal: timeoutController.signal,
-    ensureMutationLock: async () => {
-      if (command.options.plan || lockState.executionLock) {
-        return;
-      }
-      lockState.executionLock = await acquireLock(
-        sessionPaths(context.config.paths.sessions_dir, sessionMeta.session_id).executionLock,
-      );
-      const fresh = await loadSessionMeta(context.config.paths.sessions_dir, sessionMeta.session_id);
-      if (fresh.revision !== sessionMeta.revision) {
-        await lockState.executionLock.release();
-        lockState.executionLock = null;
-        throw sessionConflictError(`session \`${sessionMeta.session_id}\` changed before the first mutating tool`);
-      }
-    },
-  };
-
-  const runStartedRecord: TranscriptRecord = {
-    v: 1,
-    ts: nowIso(),
-    kind: "run_started",
-    run_id: runId,
-    session_id: sessionMeta.session_id,
-    run_kind: "prompt",
-    agent_name: agent.name,
-    role_name: role?.name ?? null,
-    model: modelId,
-    effort,
-    plan_mode: command.options.plan,
-    cwd: effectiveCwd,
-  };
-  await appendJsonlRecord(runDir.transcript, runStartedRecord);
-  await appendJsonlRecord(runDir.transcript, {
-    v: 1,
-    ts: nowIso(),
-    kind: "message",
-    run_id: runId,
-    role: "user",
-    content: prompt ? `${prompt.text}\n\n${command.message}` : command.message,
   });
-  if (stdinText !== null) {
-    await appendJsonlRecord(runDir.transcript, {
-      v: 1,
-      ts: nowIso(),
-      kind: "message",
-      run_id: runId,
-      role: "user",
-      content: stdinText,
-    });
-  }
+
+  await writeInitialTranscript({ runDir, runId, prepared, command });
+
+  const summaryInputs = (): RunSummaryInputs => ({
+    sessionMeta,
+    runId,
+    startedAt,
+    command,
+    agent,
+    role,
+    prompt,
+    modelId,
+    effort,
+    effectiveCwd,
+    artifactStats: artifactStore.stats(),
+  });
 
   try {
     await debug.emit("run", "started", {
@@ -202,55 +312,23 @@ export async function executeRunCommand(
       compactionState: pendingCompactionState,
       retainedMessages,
     });
-    await appendJsonlRecord(runDir.transcript, {
-      v: 1,
-      ts: nowIso(),
-      kind: "run_finished",
-      run_id: runId,
-      status: "completed",
-      termination_reason: "assistant_final",
+
+    const summary = buildRunSummary(summaryInputs(), {
+      kind: "completed",
+      finalText: loopResult.final_text,
+      usage: observedUsage,
+    });
+    await finalizeRun({
+      runDir,
+      runId,
+      sessionId: sessionMeta.session_id,
+      summary,
+      debug,
     });
 
-    const summary: RunSummary = {
-      v: 1,
-      session_id: sessionMeta.session_id,
-      run_id: runId,
-      run_kind: "prompt",
-      status: "completed",
-      started_at: new Date(startedAt).toISOString(),
-      finished_at: nowIso(),
-      duration_s: Number(((Date.now() - startedAt) / 1000).toFixed(3)),
-      plan_mode: command.options.plan,
-      agent_name: agent.name,
-      role_name: role?.name ?? null,
-      prompt_name: prompt?.name ?? null,
-      model: modelId,
-      effort,
-      provider: "openai_responses",
-      transport: "http",
-      cwd: effectiveCwd,
-      termination_reason: "assistant_final",
-      usage: observedUsage,
-      artifacts: artifactStore.stats(),
-      final_output: {
-        text: loopResult.final_text,
-        chars: loopResult.final_text.length,
-        artifact: null,
-      },
-      error: null,
-    };
-    await writeSummary(runDir.summary, summary);
-    await debug.emit("run", "finished", {
-      run_id: runId,
-      session_id: sessionMeta.session_id,
-      status: "completed",
-      termination_reason: "assistant_final",
-      duration_s: summary.duration_s,
-      usage: observedUsage,
-    });
     return {
       stdout: `${loopResult.final_text}\n`,
-      stderr: [],
+      stderr: "",
       exitCode: ExitCode.success,
     };
   } catch (error) {
@@ -264,59 +342,26 @@ export async function executeRunCommand(
       const requestIndex = error instanceof AgentLoopError ? error.state.provider_turns.length + 1 : 1;
       await persistProviderFailureRecord(runDir.provider, runId, requestIndex, rootError);
     }
-    await appendJsonlRecord(runDir.transcript, {
-      v: 1,
-      ts: nowIso(),
-      kind: "run_finished",
-      run_id: runId,
+
+    const summary = buildRunSummary(summaryInputs(), {
+      kind: "failed",
       status: runStatusFromError(rootError),
-      termination_reason: terminationReasonFromError(rootError),
-    });
-    const summary: RunSummary = {
-      v: 1,
-      session_id: sessionMeta.session_id,
-      run_id: runId,
-      run_kind: "prompt",
-      status: runStatusFromError(rootError),
-      started_at: new Date(startedAt).toISOString(),
-      finished_at: nowIso(),
-      duration_s: Number(((Date.now() - startedAt) / 1000).toFixed(3)),
-      plan_mode: command.options.plan,
-      agent_name: agent.name,
-      role_name: role?.name ?? null,
-      prompt_name: prompt?.name ?? null,
-      model: modelId,
-      effort,
-      provider: "openai_responses",
-      transport: "http",
-      cwd: effectiveCwd,
-      termination_reason: terminationReasonFromError(rootError),
+      terminationReason: terminationReasonFromError(rootError),
       usage: observedUsage,
-      artifacts: artifactStore.stats(),
-      final_output: {
-        text: null,
-        chars: 0,
-        artifact: null,
-      },
       error: {
         code: rootError instanceof GoatError ? rootError.code : "FAILED",
         message: formatError(rootError),
       },
-    };
-    await writeSummary(runDir.summary, summary);
-    await debug.emit("error", "run_failed", {
-      run_id: runId,
-      session_id: sessionMeta.session_id,
-      ...debugErrorData(rootError),
     });
-    await debug.emit("run", "finished", {
-      run_id: runId,
-      session_id: sessionMeta.session_id,
-      status: summary.status,
-      termination_reason: summary.termination_reason,
-      duration_s: summary.duration_s,
-      usage: observedUsage,
+    await finalizeRun({
+      runDir,
+      runId,
+      sessionId: sessionMeta.session_id,
+      summary,
+      debug,
+      failureError: rootError,
     });
+
     throw rootError;
   } finally {
     clearTimeout(timeoutHandle);

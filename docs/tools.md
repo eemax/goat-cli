@@ -77,13 +77,38 @@ Run a shell command in the local environment.
 - Executes in its own process group for clean interruption
 - Access class: **mutating**
 
-**Plan mode**: arbitrary shell execution is blocked. Only a parser-validated read-only subset is allowed:
+**Plan mode**: arbitrary shell execution is blocked. The command is tokenized
+by a small internal parser (no shell) and matched against a per-program
+allowlist. Anything outside the allowlist is rejected before any process is
+spawned.
 
-- `pwd`, `ls`, `cat`, `head`, `tail`, `wc`, `stat`, `tree`
-- `rg`, `fd` (read-only flags only)
-- `git status`, `git diff`, `git show`, `git log`, `git rev-parse`, `git ls-files`, `git branch --show-current`
+Commands containing `$`, backticks, `>`, `<`, `|`, `&`, `;`, `(`, or `)` are
+rejected outright, as are any payloads containing NUL bytes or newlines.
+Inline environment assignments (`FOO=bar cat …`) are rejected. Non-empty `env`
+overrides and explicit `shell` overrides are rejected in plan mode.
 
-Commands containing `$`, backticks, `>`, `<`, `|`, `&`, `;`, `(`, `)` are rejected. Non-empty `env` and `shell` overrides are rejected in plan mode.
+Programs and flags allowed in plan mode:
+
+| Program | Allowed flags / forms | Notes |
+|---------|----------------------|-------|
+| `pwd` | *(no arguments)* | |
+| `ls` | `-1`, `-a`, `-A`, `-l`, `-h`, and common combinations (`-la`, `-al`, `-lah`, `-ahl`, `-lha`, `-hal`) | Paths are unrestricted positional args |
+| `cat`, `stat` | *(paths only)* | At least one path required |
+| `head`, `tail` | Optional `-n <positive int>`, then paths | At least one path required |
+| `wc` | `-l`, `-c`, `-m`, then paths | At least one path required |
+| `tree` | `-a`, `-L <positive int>` | Flags must appear before paths |
+| `rg` | `--files`, `--hidden`, `-n`/`--line-number`, `-i`/`--ignore-case`, `-F`/`--fixed-strings`, `-S`/`--smart-case`, `-l`/`--files-with-matches`, `-uu`; value flags `-g`/`--glob`, `-m`/`--max-count` | Must supply a pattern unless `--files` is set |
+| `fd` | `-H`/`--hidden`, `-I`/`--no-ignore`, `-a`/`--absolute-path`, `-g`/`--glob`; value flags `-t`/`--type`, `-d`/`--max-depth` | Up to two positional arguments |
+| `git status` | `--short`/`-s`, `--branch`/`-b`, `--porcelain` | |
+| `git diff` | `--stat`, `--name-only`, `--name-status`, `--cached`/`--staged`, `--summary`, `--no-ext-diff` | |
+| `git show` | `--stat`, `--name-only`, `--name-status`, `--summary`, `--no-patch`, `--no-ext-diff` | Up to two positionals |
+| `git log` | `--oneline`, `--stat`, `--name-only`, `--name-status`, `--decorate`, `--graph`, `--no-ext-diff`; value flags `-n`/`--max-count` | Up to two positionals |
+| `git rev-parse` | `--show-toplevel`, `--git-dir`, `--show-prefix`, `--show-cdup`, `--is-inside-work-tree`, `--abbrev-ref` | Up to one positional |
+| `git ls-files` | `--others`, `--cached`, `--modified`, `--deleted`, `--ignored`, `--exclude-standard` | |
+| `git branch` | Exactly `--show-current` | All other forms rejected |
+
+Any flag or subcommand not listed above is rejected with
+`unsupported <program> flag in plan mode: <arg>`.
 
 ### read_file
 
@@ -181,13 +206,54 @@ Search text files using `rg --json`.
 
 ## Stub tools (V1)
 
-These tools have real IDs, schemas, and config sections but return structured `UNIMPLEMENTED_IN_V1` errors when invoked.
+These tools have real IDs, schemas, and config sections but return structured
+`UNIMPLEMENTED_IN_V1` failure envelopes when invoked. They are reserved so
+agent definitions, doctor checks, and the provider tool payload can be
+stabilized now and back-filled with real implementations later without
+breaking sessions that already enable them.
 
 | Tool | Future backing | Access class |
 |------|---------------|--------------|
 | `web_search` | Exa | read_only |
 | `web_fetch` | Defuddle + curl fallback | read_only |
 | `subagents` | External subagents CLI | mutating |
+
+### `web_search` (stub)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | yes | Search query string |
+| `type` | string | no | Search profile / strategy hint |
+| `num_results` | integer | no | Positive integer upper bound |
+| `published_within_days` | integer | no | Positive integer recency window |
+| `include_domains` | string[] | no | Allowlist of hostnames |
+| `exclude_domains` | string[] | no | Denylist of hostnames |
+
+### `web_fetch` (stub)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string (URL) | yes | Absolute URL to fetch |
+
+### `subagents` (stub)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `action` | string | yes | Subagent dispatch action identifier |
+
+All three return:
+
+```json
+{
+  "ok": false,
+  "summary": "<tool> is not implemented in V1.",
+  "error": {
+    "code": "UNIMPLEMENTED_IN_V1",
+    "message": "<tool> is not implemented in V1.",
+    "retryable": false
+  }
+}
+```
 
 ## Plan mode behavior
 

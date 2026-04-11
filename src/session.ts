@@ -6,7 +6,7 @@ import { monotonicFactory } from "ulid";
 
 import { configError, notFoundError, sessionConflictError, stoppedSessionError } from "./errors.js";
 import type { CompactionState, MessageRecord, SessionMeta } from "./types.js";
-import { atomicWriteFile, nowIso, parseJsonLine, stableJson } from "./utils.js";
+import { atomicWriteFile, isErrnoException, nowIso, parseJsonLine, stableJson } from "./utils.js";
 
 const nextUlid = monotonicFactory();
 
@@ -77,14 +77,90 @@ export function runPaths(sessionsDir: string, sessionId: string, runId: string):
   };
 }
 
+/**
+ * Maximum wall-clock time `acquireLock` will spend retrying before surrendering
+ * with a session-conflict error. Keeps us from blocking forever on a stuck
+ * process while still absorbing short races between concurrent runs.
+ */
+export const LOCK_ACQUIRE_TIMEOUT_MS = 2_000;
+const LOCK_RETRY_BACKOFF_MS = [25, 50, 100, 200, 400] as const;
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // ESRCH: no such process → stale. EPERM: owned by another user → still
+    // alive, we just lack permission to signal it.
+    return isErrnoException(error) && error.code === "EPERM";
+  }
+}
+
+async function removeStaleLock(path: string): Promise<boolean> {
+  const raw = await readFile(path, "utf8").catch(() => null);
+  if (raw === null) {
+    // Already gone; treat as fair game.
+    return true;
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    // Empty lock file — a writer created the file with `open(..., "wx")` and
+    // then crashed (or is about to crash) before writing its PID. The window
+    // between open and the payload write is microseconds, so anything we see
+    // at rest is effectively stale. Reclaim it.
+    await rm(path, { force: true }).catch(() => undefined);
+    return true;
+  }
+  const [pidToken] = trimmed.split(":");
+  const pid = Number.parseInt(pidToken ?? "", 10);
+  if (Number.isNaN(pid)) {
+    // Malformed payload — treat as corrupted / stale.
+    await rm(path, { force: true }).catch(() => undefined);
+    return true;
+  }
+  if (isProcessAlive(pid)) {
+    return false;
+  }
+  await rm(path, { force: true }).catch(() => undefined);
+  return true;
+}
+
 export async function acquireLock(path: string): Promise<LockHandle> {
   await mkdir(join(path, ".."), { recursive: true });
-  try {
-    const handle = await open(path, "wx");
-    await handle.writeFile(`${process.pid}:${randomUUID()}\n`);
-    return new LockHandle(path, handle);
-  } catch (_error) {
-    throw sessionConflictError(`could not acquire lock ${basename(path)}`);
+
+  const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
+  let attempt = 0;
+
+  while (true) {
+    try {
+      const handle = await open(path, "wx");
+      await handle.writeFile(`${process.pid}:${randomUUID()}\n`);
+      return new LockHandle(path, handle);
+    } catch (error) {
+      if (!isErrnoException(error) || error.code !== "EEXIST") {
+        throw sessionConflictError(`could not acquire lock ${basename(path)}`);
+      }
+    }
+
+    if (await removeStaleLock(path)) {
+      // Retry immediately after reclaiming a stale lock.
+      continue;
+    }
+
+    if (Date.now() >= deadline) {
+      throw sessionConflictError(`could not acquire lock ${basename(path)}`);
+    }
+
+    const backoff = LOCK_RETRY_BACKOFF_MS[Math.min(attempt, LOCK_RETRY_BACKOFF_MS.length - 1)];
+    attempt += 1;
+    await sleep(backoff);
   }
 }
 

@@ -4,7 +4,7 @@ import { toolError } from "./errors.js";
 import type { ToolContext } from "./harness.js";
 import { ensurePathExists, maybeArtifactForText, resolveToolPath, toRelativeDisplayPath } from "./harness.js";
 import type { ToolEnvelope } from "./types.js";
-import { atomicWriteFile } from "./utils.js";
+import { atomicWriteFile, isErrnoException } from "./utils.js";
 
 function ensureUtf8Encoding(encoding?: string): void {
   if (encoding && encoding !== "utf8" && encoding !== "utf-8") {
@@ -77,7 +77,16 @@ export async function runWriteFileTool(
   }
 
   ensureFileSizeWithinLimit(context, Buffer.byteLength(input.content));
-  const existing = await stat(path).catch(() => null);
+  let existing: Awaited<ReturnType<typeof stat>> | null = null;
+  try {
+    existing = await stat(path);
+  } catch (error) {
+    if (!isErrnoException(error) || error.code !== "ENOENT") {
+      throw toolError(
+        `failed to stat ${toRelativeDisplayPath(context, path)}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   if (existing?.isDirectory()) {
     throw toolError("path points to an existing directory");
   }

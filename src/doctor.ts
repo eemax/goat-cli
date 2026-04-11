@@ -36,7 +36,7 @@ function doctorResult(checks: DoctorCheck[]): CommandOutput {
   const hasFailure = checks.some((check) => check.status === "FAIL");
   return {
     stdout: `${checks.map(renderDoctorCheck).join("\n")}\n`,
-    stderr: [],
+    stderr: "",
     exitCode: hasFailure ? ExitCode.doctorFailure : ExitCode.success,
   };
 }
@@ -127,7 +127,9 @@ export async function runDoctor(
     reason: hasRg ? undefined : "ripgrep is not installed",
   });
 
-  const apiKey = await resolveOpenAIApiKey(config, deps?.env);
+  // Prefer the explicit `env` parameter so callers that inject an env without
+  // passing the full `RuntimeDeps` struct still get their API key resolved.
+  const apiKey = await resolveOpenAIApiKey(config, deps?.env ?? env);
   if (!apiKey) {
     checks.push({ name: "openai_credentials", status: "FAIL", reason: "OpenAI API key is not configured" });
   } else {

@@ -3,24 +3,40 @@ import { stat } from "node:fs/promises";
 import { normalize, relative, resolve } from "node:path";
 import { z } from "zod";
 
-import { type ArtifactStore, createPreview } from "./artifacts.js";
+import { type ArtifactStore, createPreview, PREVIEW_CHAR_LIMIT } from "./artifacts.js";
 import { GoatError, toolError } from "./errors.js";
 import type { ALL_TOOL_IDS } from "./tool-ids.js";
 import { runBashTool } from "./tools-bash.js";
 import { runReadFileTool, runReplaceInFileTool, runWriteFileTool } from "./tools-files.js";
 import { applyStructuredPatch } from "./tools-patch.js";
 import { runGlobTool, runGrepTool } from "./tools-search.js";
-import type { GlobalConfig, ToolAccessClass, ToolEnvelope } from "./types.js";
-
-type ToolHandler = (context: ToolContext, input: any) => Promise<ToolEnvelope>;
+import type { GlobalConfig, ProviderTool, ToolAccessClass, ToolEnvelope } from "./types.js";
+import { isErrnoException } from "./utils.js";
 
 type ToolDefinition = {
   id: (typeof ALL_TOOL_IDS)[number];
   description: string;
   access: ToolAccessClass;
   schema: z.ZodTypeAny;
-  handler: ToolHandler;
+  handler: (context: ToolContext, input: unknown) => Promise<ToolEnvelope>;
 };
+
+/**
+ * Build a tool definition whose handler input is inferred from its schema.
+ *
+ * The handler body sees `z.infer<TSchema>` — no `any`, no manual casting — and
+ * the registry still stores a homogeneous `ToolDefinition[]` because we erase
+ * the generic at the boundary.
+ */
+function defineTool<TSchema extends z.ZodTypeAny>(definition: {
+  id: (typeof ALL_TOOL_IDS)[number];
+  description: string;
+  access: ToolAccessClass;
+  schema: TSchema;
+  handler: (context: ToolContext, input: z.infer<TSchema>) => Promise<ToolEnvelope>;
+}): ToolDefinition {
+  return definition as unknown as ToolDefinition;
+}
 
 export type ToolContext = {
   cwd: string;
@@ -33,18 +49,10 @@ export type ToolContext = {
   abortSignal?: AbortSignal;
 };
 
-type ProviderTool = {
-  type: "function";
-  name: string;
-  description: string;
-  strict: true;
-  parameters: Record<string, unknown>;
-};
-
 const fileEncodingSchema = z.enum(["utf8", "utf-8"]).default("utf8");
 
 const toolDefinitions: ToolDefinition[] = [
-  {
+  defineTool({
     id: "bash",
     description: "Run a shell command in the local environment.",
     access: "mutating",
@@ -57,8 +65,8 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: (context, input) => runBashTool(context, input),
-  },
-  {
+  }),
+  defineTool({
     id: "read_file",
     description: "Read UTF-8 text files with optional line slicing.",
     access: "read_only",
@@ -71,8 +79,8 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: (context, input) => runReadFileTool(context, input),
-  },
-  {
+  }),
+  defineTool({
     id: "write_file",
     description: "Create or overwrite a file with exact content.",
     access: "mutating",
@@ -84,8 +92,8 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: (context, input) => runWriteFileTool(context, input),
-  },
-  {
+  }),
+  defineTool({
     id: "replace_in_file",
     description: "Replace exact text in a file.",
     access: "mutating",
@@ -98,8 +106,8 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: (context, input) => runReplaceInFileTool(context, input),
-  },
-  {
+  }),
+  defineTool({
     id: "apply_patch",
     description: "Apply Goat structured patch text.",
     access: "mutating",
@@ -110,8 +118,8 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: (context, input) => applyStructuredPatch(context, input),
-  },
-  {
+  }),
+  defineTool({
     id: "glob",
     description: "Find files using rg --files.",
     access: "read_only",
@@ -122,8 +130,8 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: (context, input) => runGlobTool(context, input),
-  },
-  {
+  }),
+  defineTool({
     id: "grep",
     description: "Search text files using rg --json.",
     access: "read_only",
@@ -136,8 +144,8 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: (context, input) => runGrepTool(context, input),
-  },
-  {
+  }),
+  defineTool({
     id: "web_search",
     description: "Stubbed web search tool reserved for future Exa integration.",
     access: "read_only",
@@ -152,8 +160,8 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: async () => unimplementedTool("web_search"),
-  },
-  {
+  }),
+  defineTool({
     id: "web_fetch",
     description: "Stubbed web fetch tool reserved for future Defuddle integration.",
     access: "read_only",
@@ -163,8 +171,8 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: async () => unimplementedTool("web_fetch"),
-  },
-  {
+  }),
+  defineTool({
     id: "subagents",
     description: "Stubbed subagents tool reserved for future CLI integration.",
     access: "mutating",
@@ -174,7 +182,7 @@ const toolDefinitions: ToolDefinition[] = [
       })
       .strict(),
     handler: async () => unimplementedTool("subagents"),
-  },
+  }),
 ];
 
 function unimplementedTool(name: string): ToolEnvelope {
@@ -259,7 +267,15 @@ export async function ensurePathExists(path: string, kind: "file" | "directory")
     if (error instanceof GoatError) {
       throw error;
     }
-    throw toolError(`${path} was not found`);
+    if (isErrnoException(error)) {
+      if (error.code === "ENOENT") {
+        throw toolError(`${path} was not found`);
+      }
+      if (error.code === "EACCES" || error.code === "EPERM") {
+        throw toolError(`${path} is not accessible (permission denied)`);
+      }
+    }
+    throw toolError(`${path} could not be inspected: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -347,7 +363,7 @@ export async function maybeArtifactForText(
 
   const artifact = await context.artifacts.write(prefix, content, contentType);
   return {
-    preview: createPreview(content, Math.min(context.config.max_output_chars, 4000)),
+    preview: createPreview(content, Math.min(context.config.max_output_chars, PREVIEW_CHAR_LIMIT)),
     artifact,
     partial: true,
   };
@@ -366,25 +382,34 @@ export type ProcessResult = {
 };
 
 function terminateChildProcess(child: ReturnType<typeof spawn>, detached = false): void {
-  try {
-    if (detached && process.platform !== "win32" && child.pid) {
-      process.kill(-child.pid, "SIGTERM");
-      setTimeout(() => {
-        if (!child.killed && child.pid) {
-          process.kill(-child.pid, "SIGKILL");
-        }
-      }, 100).unref();
-      return;
+  // Both the synchronous signal and the delayed follow-up can race the child
+  // exiting on its own. Swallow errors in both branches — if the process is
+  // already gone we've already captured the output we care about.
+  const safeKill = (fn: () => void): void => {
+    try {
+      fn();
+    } catch {
+      // Ignore ESRCH / ESRCH-adjacent errors from signalling a dead process.
     }
-    child.kill("SIGTERM");
+  };
+
+  if (detached && process.platform !== "win32" && child.pid) {
+    const pid = child.pid;
+    safeKill(() => process.kill(-pid, "SIGTERM"));
     setTimeout(() => {
       if (!child.killed) {
-        child.kill("SIGKILL");
+        safeKill(() => process.kill(-pid, "SIGKILL"));
       }
     }, 100).unref();
-  } catch {
-    // Ignore follow-up process termination failures and return the capped output we already captured.
+    return;
   }
+
+  safeKill(() => child.kill("SIGTERM"));
+  setTimeout(() => {
+    if (!child.killed) {
+      safeKill(() => child.kill("SIGKILL"));
+    }
+  }, 100).unref();
 }
 
 export async function runProcess(

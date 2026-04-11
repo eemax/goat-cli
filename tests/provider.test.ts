@@ -65,7 +65,15 @@ describe("OpenAIResponsesProvider", () => {
       previous_response_id: "resp-0",
       effort: "medium",
       max_output_tokens: 1234,
-      tools: [{ type: "function", name: "read_file" }],
+      tools: [
+        {
+          type: "function",
+          name: "read_file",
+          description: "Read a file.",
+          strict: true,
+          parameters: { type: "object" },
+        },
+      ],
       onTextDelta: (delta) => {
         deltas.push(delta);
       },

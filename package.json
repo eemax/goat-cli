@@ -2,8 +2,16 @@
   "name": "goat-cli",
   "version": "0.1.0",
   "private": true,
+  "license": "UNLICENSED",
   "type": "module",
   "description": "Session-first non-interactive agent harness CLI",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eemax/goat-cli.git"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
   "bin": {
     "goat": "./src/main.ts"
   },
@@ -13,6 +21,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/ tests/",
     "lint:fix": "biome check --write src/ tests/",
+    "format": "biome format --write src/ tests/",
     "check": "bun run typecheck && bun run lint && bun test"
   },
   "dependencies": {

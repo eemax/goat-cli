@@ -7,13 +7,14 @@ import OpenAI, {
 } from "openai";
 import type {
   EasyInputMessage,
+  FunctionTool,
   Response,
   ResponseFunctionToolCall,
   ResponseFunctionToolCallOutputItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses";
 import { providerError } from "./errors.js";
-import type { Effort, ProviderUsage } from "./types.js";
+import type { Effort, ProviderTool, ProviderUsage } from "./types.js";
 
 export type ProviderInputItem = EasyInputMessage | ResponseFunctionToolCallOutputItem;
 
@@ -40,7 +41,7 @@ export type ProviderRequest = {
   previous_response_id: string | null;
   effort: Effort | null;
   max_output_tokens: number | null;
-  tools: Array<Record<string, unknown>>;
+  tools: ProviderTool[];
   abortSignal?: AbortSignal;
   onTextDelta?: (delta: string) => void;
 };
@@ -55,10 +56,10 @@ function normalizeUsage(response: Response): ProviderUsage | null {
   }
 
   return {
-    input_tokens: response.usage.input_tokens,
-    output_tokens: response.usage.output_tokens,
-    reasoning_tokens: response.usage.output_tokens_details.reasoning_tokens,
-    cached_input_tokens: response.usage.input_tokens_details.cached_tokens,
+    input_tokens: response.usage.input_tokens ?? 0,
+    output_tokens: response.usage.output_tokens ?? 0,
+    reasoning_tokens: response.usage.output_tokens_details?.reasoning_tokens ?? 0,
+    cached_input_tokens: response.usage.input_tokens_details?.cached_tokens ?? 0,
   };
 }
 
@@ -127,7 +128,11 @@ export class OpenAIResponsesProvider implements ProviderClient {
           reasoning: request.effort && request.effort !== "none" ? { effort: request.effort } : undefined,
           max_output_tokens: request.max_output_tokens ?? undefined,
           parallel_tool_calls: false,
-          tools: request.tools as any,
+          // `ProviderTool` structurally matches the SDK's `FunctionTool` (name,
+          // description, parameters, strict, type: "function"); this narrow
+          // cast avoids `as any` while still bridging our internal type to
+          // the SDK's wider `Tool` union.
+          tools: request.tools satisfies ProviderTool[] as FunctionTool[],
           stream: true,
         },
         {

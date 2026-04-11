@@ -9,6 +9,14 @@ import {
 } from "./harness.js";
 import type { ToolEnvelope } from "./types.js";
 
+function extractTextField(value: unknown): string | null {
+  if (value && typeof value === "object" && "text" in value) {
+    const text = (value as { text: unknown }).text;
+    return typeof text === "string" ? text : null;
+  }
+  return null;
+}
+
 export async function runGlobTool(
   context: ToolContext,
   input: {
@@ -93,18 +101,27 @@ export async function runGrepTool(
     if (!line.trim()) {
       continue;
     }
-    const parsed = JSON.parse(line) as Record<string, unknown>;
-    if (parsed.type !== "match") {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      // Malformed rg --json line: skip rather than fail the whole tool.
+      continue;
+    }
+    if (parsed.type !== "match" || !parsed.data || typeof parsed.data !== "object") {
       continue;
     }
     const data = parsed.data as Record<string, unknown>;
-    const path = data.path as { text: string };
-    const lines = data.lines as { text: string };
+    const pathText = extractTextField(data.path);
+    const linesText = extractTextField(data.lines);
+    if (pathText === null || linesText === null) {
+      continue;
+    }
     const lineNumber = Number(data.line_number ?? 0);
     matches.push({
-      path: toRelativeDisplayPath(context, resolveToolPath({ ...context, cwd: root }, path.text)),
+      path: toRelativeDisplayPath(context, resolveToolPath({ ...context, cwd: root }, pathText)),
       line: lineNumber,
-      text: lines.text.trimEnd(),
+      text: linesText.trimEnd(),
     });
   }
   const inline = JSON.stringify(matches, null, 2);

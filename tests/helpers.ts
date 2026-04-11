@@ -1,8 +1,10 @@
 import { afterEach } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { ArtifactStore } from "../src/artifacts.js";
+import type { ToolContext } from "../src/harness.js";
 import type { ProviderClient, ProviderRequest, ProviderTurnResult } from "../src/provider.js";
 import type { GlobalConfig } from "../src/types.js";
 
@@ -66,5 +68,39 @@ export function useCleanup(): { track: (...pathsToTrack: string[]) => void; path
   return {
     track: (...pathsToTrack: string[]) => paths.push(...pathsToTrack),
     paths,
+  };
+}
+
+/**
+ * Build a ToolContext rooted at a fresh tempdir. Used by tools/agent/harness
+ * tests that need a realistic run cwd and artifact store without setting up a
+ * full session on disk.
+ */
+export async function createToolContextFixture(options?: {
+  planMode?: boolean;
+  tempPrefix?: string;
+  track?: (...paths: string[]) => void;
+  mutationLockTracker?: { count: number };
+  config?: GlobalConfig["tools"];
+  catastrophicOutputLimit?: number;
+}): Promise<ToolContext> {
+  const runRoot = await createTempDir(options?.tempPrefix ?? "goat-ctx-");
+  options?.track?.(runRoot);
+  const cwd = join(runRoot, "workspace");
+  const artifactsDir = join(runRoot, "artifacts");
+  await mkdir(cwd, { recursive: true });
+  const lockTracker = options?.mutationLockTracker;
+  return {
+    cwd,
+    planMode: options?.planMode ?? false,
+    config: options?.config ?? testToolsConfig,
+    catastrophicOutputLimit: options?.catastrophicOutputLimit ?? testArtifactsConfig.catastrophic_output_limit,
+    artifacts: new ArtifactStore(artifactsDir),
+    runRoot,
+    ensureMutationLock: async () => {
+      if (lockTracker) {
+        lockTracker.count += 1;
+      }
+    },
   };
 }

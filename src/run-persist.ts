@@ -13,11 +13,14 @@ import {
   writeSessionMeta,
 } from "./session.js";
 import type {
+  AgentDef,
   Command,
   CompactionState,
   Effort,
   MessageRecord,
+  PromptDef,
   ProviderUsage,
+  RoleDef,
   RunSummary,
   SessionMeta,
   TranscriptRecord,
@@ -25,6 +28,88 @@ import type {
 import { atomicWriteFile, nowIso, stableJson } from "./utils.js";
 
 type RunCommand = Extract<Command, { kind: "run" }>;
+
+export type RunSummaryInputs = {
+  sessionMeta: SessionMeta;
+  runId: string;
+  startedAt: number;
+  command: RunCommand;
+  agent: AgentDef;
+  role: RoleDef | null;
+  prompt: PromptDef | null;
+  modelId: string;
+  effort: Effort | null;
+  effectiveCwd: string;
+  artifactStats: { count: number; total_bytes: number };
+};
+
+export type RunOutcome =
+  | {
+      kind: "completed";
+      finalText: string;
+      usage: ProviderUsage | null;
+    }
+  | {
+      kind: "failed";
+      status: RunSummary["status"];
+      terminationReason: string;
+      error: { code: string; message: string };
+      usage: ProviderUsage | null;
+    };
+
+/**
+ * Build a `RunSummary` for either a completed or failed run. Both paths share
+ * the same sticky run metadata — this helper enforces that they stay in sync.
+ */
+export function buildRunSummary(inputs: RunSummaryInputs, outcome: RunOutcome): RunSummary {
+  const base = {
+    v: 1 as const,
+    session_id: inputs.sessionMeta.session_id,
+    run_id: inputs.runId,
+    run_kind: "prompt" as const,
+    started_at: new Date(inputs.startedAt).toISOString(),
+    finished_at: nowIso(),
+    duration_s: Number(((Date.now() - inputs.startedAt) / 1000).toFixed(3)),
+    plan_mode: inputs.command.options.plan,
+    agent_name: inputs.agent.name,
+    role_name: inputs.role?.name ?? null,
+    prompt_name: inputs.prompt?.name ?? null,
+    model: inputs.modelId,
+    effort: inputs.effort,
+    provider: "openai_responses" as const,
+    transport: "http" as const,
+    cwd: inputs.effectiveCwd,
+    artifacts: inputs.artifactStats,
+  };
+
+  if (outcome.kind === "completed") {
+    return {
+      ...base,
+      status: "completed",
+      termination_reason: "assistant_final",
+      usage: outcome.usage,
+      final_output: {
+        text: outcome.finalText,
+        chars: outcome.finalText.length,
+        artifact: null,
+      },
+      error: null,
+    };
+  }
+
+  return {
+    ...base,
+    status: outcome.status,
+    termination_reason: outcome.terminationReason,
+    usage: outcome.usage,
+    final_output: {
+      text: null,
+      chars: 0,
+      artifact: null,
+    },
+    error: outcome.error,
+  };
+}
 
 export async function appendJsonlRecord(path: string, record: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });

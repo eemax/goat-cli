@@ -131,20 +131,29 @@ One line per check: `PASS <name>`, `FAIL <name>: <reason>`, or `SKIP <name>: <re
 
 ## Exit codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Internal runtime error |
-| 2 | Usage or input error (including stdin overflow) |
-| 3 | Config, definition, or invalid session-state error |
-| 4 | Not found |
-| 5 | Stopped session |
-| 6 | Session conflict |
-| 7 | Provider failure |
-| 8 | Tool failure (including plan-mode shell guard violations) |
-| 9 | Interrupted |
-| 10 | Timeout |
-| 11 | Doctor failure |
+Every non-zero exit is produced by a single `GoatError` subclass, so the
+mapping from error code to exit code is stable and documented below.
+
+| Code | Name | Typical triggers |
+|------|------|------------------|
+| 0 | Success | The command completed normally. |
+| 1 | Internal runtime error | Unhandled exception, unexpected invariant failure, or unknown command kind. Anything not classified as a Goat error falls here. |
+| 2 | Usage / input error | `USAGE_ERROR` — bad CLI args, conflicting flags, unknown flag, missing prompt argument, stdin larger than `runtime.max_stdin`, effective cwd missing or not a directory, assembled prompt still exceeds `compact_at_tokens` after compaction. |
+| 3 | Config / definition error | `CONFIG_ERROR` — invalid `goat.toml` / `models.toml`, duplicate model id or alias, missing default agent, agent enables an unknown tool, agent references an unknown model, bound session cannot switch agents, missing API key. |
+| 4 | Not found | `NOT_FOUND` — session, agent, role, prompt, or run id not found; `goat last` with no active session containing committed history. |
+| 5 | Stopped session | `STOPPED_SESSION` — the target session has been stopped via `goat sessions stop`. |
+| 6 | Session conflict | `SESSION_CONFLICT` — another process committed to the session during the run, or the execution lock could not be acquired. |
+| 7 | Provider failure | `PROVIDER_FAILURE` — OpenAI SDK threw a retryable or non-retryable provider error (rate limit, connection error, server error, API error). |
+| 8 | Tool failure | `TOOL_FAILURE` — a tool threw a `toolError`, including plan-mode shell guard violations, schema validation failures that bubbled out of the handler, unknown tool names, or disabled tool attempts. |
+| 9 | Interrupted | `INTERRUPTED` — user interrupt or deliberate abort. |
+| 10 | Timeout | `TIMEOUT` — wall-clock run timeout (`--timeout`, agent `run_timeout`, or `runtime.run_timeout`) elapsed. |
+| 11 | Doctor failure | Any `goat doctor` check reported `FAIL`. |
+
+Tool call failures do **not** crash the run — a failing tool returns a
+structured error envelope inside the transcript and the agent loop continues.
+Exit code 8 is only returned when a tool throws a `GoatError` that escapes
+the harness (e.g. the plan-mode guard rejecting the command outright before
+the tool executes).
 
 ## Session resolution
 

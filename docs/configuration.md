@@ -83,8 +83,19 @@ Credential precedence: `api_key` > env var named by `api_key_env` > `OPENAI_API_
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `max_stdin` | size | `8mb` | Hard limit for stdin payload |
-| `run_timeout` | duration | `2h` | Total wall-clock run timeout |
+| `max_stdin` | size | `8mb` | Hard upper bound on stdin payload. Exceeding this fails with exit code 2 (`USAGE_ERROR`). |
+| `run_timeout` | duration | `2h` | Total wall-clock run timeout. Applies to the whole prompt run (provider turns + tool execution). |
+
+**Timeout precedence**. The effective run timeout is resolved in order:
+
+1. `--timeout <duration>` on the command line (not sticky; per-run only)
+2. Agent `run_timeout` from the agent definition
+3. `[runtime].run_timeout` from `goat.toml`
+
+The lowest layer that is set wins. When the timeout elapses, the run's
+`AbortSignal` fires, the provider stream is cancelled, the run summary is
+written with `status = "timed_out"`, and the CLI exits with code 10
+(`TIMEOUT`).
 
 ### `[compaction]`
 
@@ -107,10 +118,10 @@ When `model` is unset, compaction uses the default agent's model. Effort and out
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `default_shell` | string | `/bin/bash` | Shell for `bash` tool |
-| `default_shell_args` | string[] | `["-lc"]` | Shell arguments |
-| `max_output_chars` | size | `200k` | Tool output truncation boundary |
-| `max_file_size` | size | `1mb` | File-size cap for file/patch tools |
+| `default_shell` | string | `/bin/bash` | Shell used by the `bash` tool in normal mode. Ignored in plan mode. |
+| `default_shell_args` | string[] | `["-lc"]` | Arguments passed to `default_shell` before the user command. |
+| `max_output_chars` | size | `200k` | Inline tool output ceiling. When a tool's stdout/stdout+stderr exceeds this, the envelope switches to a `partial: true` shape with a head/tail preview and an artifact reference under `runs/<id>/artifacts/`. The preview itself is capped at `min(max_output_chars, 4000)` characters. |
+| `max_file_size` | size | `1mb` | Hard cap enforced by `read_file`, `write_file`, and `replace_in_file`. Reads or writes that would exceed this fail with `TOOL_FAILURE`. |
 
 ### `[tools.web_search]`
 

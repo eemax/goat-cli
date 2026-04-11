@@ -4,6 +4,9 @@ import { extname, join } from "node:path";
 import type { ArtifactRef } from "./types.js";
 import { atomicWriteFile, sha256Hex } from "./utils.js";
 
+/** Default cap on the number of characters included in any inline tool-output preview. */
+export const PREVIEW_CHAR_LIMIT = 4000;
+
 const EXTENSIONS: Record<string, string> = {
   "text/plain": ".txt",
   "application/json": ".json",
@@ -36,7 +39,7 @@ export class ArtifactStore {
   }
 }
 
-export function createPreview(text: string, maxChars = 4000): string {
+export function createPreview(text: string, maxChars = PREVIEW_CHAR_LIMIT): string {
   if (text.length <= maxChars) {
     return text;
   }

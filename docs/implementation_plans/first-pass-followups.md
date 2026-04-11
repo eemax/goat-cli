@@ -11,7 +11,7 @@ This file captures the detailed work that did not fully land in the first implem
 
 ## Highest-Value Next Steps
 
-- Replace the local compaction heuristic with a real provider-backed compaction flow using the built-in prompt in [compaction-prompt.md](/Users/max/goat-cli/src/builtins/compaction-prompt.md).
+- Replace the local compaction heuristic with a real provider-backed compaction flow using the built-in prompt in [compaction-prompt.md](../../src/builtins/compaction-prompt.md).
 - Persist pre-send compaction as an explicit `compaction` run with its own `transcript.jsonl`, `provider.jsonl`, and `summary.json`.
 - Add mid-run safe-point compaction that can rebuild the working set, drop `previous_response_id`, and continue after a checkpoint.
 - Preserve and persist richer provider metadata, including normalized retry records and sanitized error details.

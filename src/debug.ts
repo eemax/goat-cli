@@ -1,4 +1,5 @@
 import type { Writable } from "node:stream";
+import { PREVIEW_CHAR_LIMIT } from "./artifacts.js";
 import { GoatError } from "./errors.js";
 import { writeText } from "./io.js";
 import type { PromptMessage } from "./prompt.js";
@@ -25,7 +26,7 @@ export interface DebugSink {
 
 const HUMAN_OBJECT_LIMIT = 420;
 const HUMAN_STRING_LIMIT = 180;
-const JSON_PREVIEW_LIMIT = 4000;
+const JSON_PREVIEW_LIMIT = PREVIEW_CHAR_LIMIT;
 const PREVIEW_INPUT_LIMIT = 8;
 
 const CATEGORY_COLORS: Record<DebugCategory, number> = {

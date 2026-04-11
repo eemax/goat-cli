@@ -13,7 +13,7 @@ import {
 import { providerError } from "./errors.js";
 import { executeToolCall, type ToolContext } from "./harness.js";
 import type { ProviderClient, ProviderInputItem, ProviderTurnResult } from "./provider.js";
-import type { ProviderUsage, ToolEnvelope, TranscriptRecord } from "./types.js";
+import type { ProviderTool, ProviderUsage, ToolEnvelope, TranscriptRecord } from "./types.js";
 import { nowIso } from "./utils.js";
 
 export type AgentLoopResult = {
@@ -77,7 +77,7 @@ export async function runAgentLoop(params: {
   model: string;
   instructions: string;
   initialInput: ProviderInputItem[];
-  tools: Array<Record<string, unknown>>;
+  tools: ProviderTool[];
   enabledTools: string[];
   effort: import("./types.js").Effort | null;
   maxOutputTokens: number | null;

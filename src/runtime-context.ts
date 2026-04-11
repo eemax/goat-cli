@@ -25,7 +25,11 @@ export type AppContext = BaseContext & {
 
 export type CommandOutput = {
   stdout: string;
-  stderr: string[];
+  /**
+   * Final stderr payload for the command. Either an empty string or a
+   * newline-terminated chunk; `main()` writes it verbatim when non-empty.
+   */
+  stderr: string;
   exitCode: number;
 };
 

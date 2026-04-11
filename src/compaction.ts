@@ -1,5 +1,5 @@
 import type { CompactionState, GlobalConfig, MessageRecord, SessionMeta } from "./types.js";
-import { nowIso } from "./utils.js";
+import { estimateTextTokens, nowIso } from "./utils.js";
 
 export type CompactionResult = {
   retainedMessages: MessageRecord[];
@@ -11,7 +11,7 @@ const MAX_OPEN_LOOP_ITEMS = 8;
 const MAX_SUMMARY_ITEM_CHARS = 240;
 
 function estimateMessageTokens(message: MessageRecord): number {
-  return Math.ceil(message.content.length / 3);
+  return estimateTextTokens(message.content);
 }
 
 function summarizeText(text: string, maxChars = MAX_SUMMARY_ITEM_CHARS): string {
@@ -36,9 +36,11 @@ function normalizeSummaryList(value: unknown): string[] {
 
 function mergeSummaryList(previous: unknown, additions: string[], limit: number): string[] | undefined {
   const merged = [...normalizeSummaryList(previous), ...additions.map((item) => summarizeText(item))];
+  const seen = new Set<string>();
   const deduped: string[] = [];
   for (const item of merged) {
-    if (!deduped.includes(item)) {
+    if (!seen.has(item)) {
+      seen.add(item);
       deduped.push(item);
     }
   }

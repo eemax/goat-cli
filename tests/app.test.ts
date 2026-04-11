@@ -106,7 +106,7 @@ async function runCli(
 
   return {
     stdout: output.stdout,
-    stderr: [stderr.text.trim(), output.stderr.join("\n").trim()].filter(Boolean).join("\n"),
+    stderr: [stderr.text.trim(), output.stderr.trim()].filter(Boolean).join("\n"),
     exitCode: output.exitCode,
   };
 }

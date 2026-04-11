@@ -4,7 +4,7 @@ import { toolError } from "./errors.js";
 import type { ToolContext } from "./harness.js";
 import { resolveToolPath, toRelativeDisplayPath } from "./harness.js";
 import type { ToolEnvelope } from "./types.js";
-import { atomicWriteFile } from "./utils.js";
+import { atomicWriteFile, isErrnoException } from "./utils.js";
 
 type PatchOp =
   | { type: "add"; path: string; lines: string[] }
@@ -235,13 +235,17 @@ export async function applyStructuredPatch(
   for (const operation of operations) {
     if (operation.type === "add") {
       const target = resolveToolPath(localContext, operation.path);
+      let alreadyExists = false;
       try {
         await stat(target);
-        throw toolError(`cannot add ${operation.path}; file already exists`);
+        alreadyExists = true;
       } catch (error) {
-        if (error instanceof Error && error.message.startsWith("cannot add")) {
-          throw error;
+        if (!isErrnoException(error) || error.code !== "ENOENT") {
+          throw toolError(`cannot add ${operation.path}: ${error instanceof Error ? error.message : String(error)}`);
         }
+      }
+      if (alreadyExists) {
+        throw toolError(`cannot add ${operation.path}; file already exists`);
       }
       writes.set(target, operation.lines.length === 0 ? "" : `${operation.lines.join("\n")}\n`);
       changed.push(toRelativeDisplayPath(localContext, target));
@@ -249,17 +253,28 @@ export async function applyStructuredPatch(
     }
     if (operation.type === "delete") {
       const target = resolveToolPath(localContext, operation.path);
-      await stat(target).catch(() => {
-        throw toolError(`cannot delete ${operation.path}; file does not exist`);
-      });
+      try {
+        await stat(target);
+      } catch (error) {
+        if (isErrnoException(error) && error.code === "ENOENT") {
+          throw toolError(`cannot delete ${operation.path}; file does not exist`);
+        }
+        throw toolError(`cannot delete ${operation.path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
       writes.set(target, null);
       changed.push(toRelativeDisplayPath(localContext, target));
       continue;
     }
     const source = resolveToolPath(localContext, operation.path);
-    const original = await readFile(source, "utf8").catch(() => {
-      throw toolError(`cannot update ${operation.path}; file does not exist`);
-    });
+    let original: string;
+    try {
+      original = await readFile(source, "utf8");
+    } catch (error) {
+      if (isErrnoException(error) && error.code === "ENOENT") {
+        throw toolError(`cannot update ${operation.path}; file does not exist`);
+      }
+      throw toolError(`cannot update ${operation.path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     const updated = applyHunks(original, operation.hunks);
     writes.set(source, updated);
     changed.push(toRelativeDisplayPath(localContext, source));

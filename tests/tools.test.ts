@@ -1,28 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { ArtifactStore } from "../src/artifacts.js";
 import { executeToolCall, exportProviderTools, runProcess } from "../src/harness.js";
-import { createTempDir, testToolsConfig, useCleanup } from "./helpers.js";
+import { createToolContextFixture, useCleanup } from "./helpers.js";
 
 const { track } = useCleanup();
 
-async function createContext(planMode = false, catastrophicOutputLimit = 4096) {
-  const runRoot = await createTempDir("goat-run-");
-  track(runRoot);
-  const cwd = join(runRoot, "workspace");
-  const artifactsDir = join(runRoot, "artifacts");
-  await mkdir(cwd, { recursive: true });
-  return {
-    cwd,
+async function createContext(planMode = false, catastrophicOutputLimit?: number) {
+  return createToolContextFixture({
     planMode,
-    config: testToolsConfig,
+    tempPrefix: "goat-run-",
+    track,
     catastrophicOutputLimit,
-    artifacts: new ArtifactStore(artifactsDir),
-    runRoot,
-    ensureMutationLock: async () => undefined,
-  };
+  });
 }
 
 describe("tool registry", () => {
@@ -85,7 +76,9 @@ describe("search tools", () => {
       pattern: "*.ts",
     });
     expect(globResult.ok).toBe(true);
-    expect(globResult.ok && globResult.data?.matches).toEqual(expect.arrayContaining(["one.ts", "two.ts"]));
+    // rg --files does not guarantee ordering, so compare as a set.
+    const matches = globResult.ok ? ((globResult.data?.matches as string[] | undefined) ?? []) : [];
+    expect([...matches].sort()).toEqual(["one.ts", "two.ts"]);
 
     const grepResult = await executeToolCall(context, ["glob", "grep"], "grep", {
       pattern: "two",

@@ -30,6 +30,7 @@ import type {
   RoleDef,
   SessionMeta,
 } from "./types.js";
+import { isErrnoException } from "./utils.js";
 
 type RunCommand = Extract<Command, { kind: "run" }>;
 
@@ -111,7 +112,17 @@ async function ensureExistingDirectory(path: string): Promise<void> {
     if (isGoatError(error)) {
       throw error;
     }
-    throw usageError(`working directory \`${path}\` was not found`);
+    if (isErrnoException(error)) {
+      if (error.code === "ENOENT") {
+        throw usageError(`working directory \`${path}\` was not found`);
+      }
+      if (error.code === "EACCES" || error.code === "EPERM") {
+        throw usageError(`working directory \`${path}\` is not accessible (permission denied)`);
+      }
+    }
+    throw usageError(
+      `working directory \`${path}\` could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
