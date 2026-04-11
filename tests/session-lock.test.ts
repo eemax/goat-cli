@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { acquireLock, createSession, LOCK_ACQUIRE_TIMEOUT_MS } from "../src/session.js";
@@ -63,13 +63,26 @@ describe("acquireLock", () => {
     expect(elapsed).toBeLessThan(LOCK_ACQUIRE_TIMEOUT_MS + 2_000);
   }, 10_000);
 
-  test("reclaims a zero-length lock file (written but never filled)", async () => {
-    // Simulates a writer that opened the lock but crashed before writing the
-    // PID payload. We still want the lock to be reclaimable.
+  test("does not immediately reclaim a fresh zero-length lock file", async () => {
+    // A freshly-created empty lock could still belong to a live process that is
+    // between open("wx") and writeFile(...), so do not reclaim it immediately.
     const root = await createTempDir("goat-lock-");
     track(root);
     const lockPath = join(root, "empty.lock");
     await writeFile(lockPath, "");
+
+    await expect(acquireLock(lockPath)).rejects.toMatchObject({
+      code: "SESSION_CONFLICT",
+    });
+  }, 10_000);
+
+  test("reclaims an old zero-length lock file", async () => {
+    const root = await createTempDir("goat-lock-");
+    track(root);
+    const lockPath = join(root, "stale-empty.lock");
+    await writeFile(lockPath, "");
+    const staleTimestamp = new Date(Date.now() - 10_000);
+    await utimes(lockPath, staleTimestamp, staleTimestamp);
 
     const handle = await acquireLock(lockPath);
     try {

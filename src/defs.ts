@@ -51,6 +51,7 @@ const rawModelsSchema = z
         z
           .object({
             id: z.string().min(1),
+            provider: z.literal("openai_responses").optional(),
             provider_model: z.string().min(1).optional(),
             aliases: z.array(z.string().min(1)).optional(),
             context_window: tokenSchema.nullable().optional(),

@@ -85,6 +85,23 @@ id = "gpt-5.4-mini"
     expect(() => resolveModel(catalog, "nonsense")).toThrow(/unknown model/);
   });
 
+  test("accepts the legacy provider field used by checked-in models.toml", async () => {
+    const home = await createTempDir("goat-defs-");
+    track(home);
+    await writeFile(
+      join(home, "models.toml"),
+      `
+[[models]]
+id = "gpt-5.4-mini"
+provider = "openai_responses"
+provider_model = "gpt-5.4-mini"
+aliases = ["mini"]
+`,
+    );
+    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
+    expect(resolveModelId(catalog, "mini")).toBe("gpt-5.4-mini");
+  });
+
   test("returns empty catalog when no models.toml layer exists", async () => {
     const home = await createTempDir("goat-defs-");
     track(home);
