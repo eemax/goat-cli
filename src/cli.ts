@@ -127,10 +127,6 @@ function parseRun(commandName: RunCommand["name"], session: SessionSelector, arg
     throw usageError("--debug-json cannot be used with --verbose");
   }
 
-  if (options.debugJson && options.debug && options.verbose) {
-    throw usageError("--debug-json cannot be combined with raw stderr streaming");
-  }
-
   if (options.role && options.noRole) {
     throw usageError("--role and --no-role cannot be used together");
   }
@@ -150,10 +146,6 @@ function parseRun(commandName: RunCommand["name"], session: SessionSelector, arg
     options,
     message: positionals[0],
   };
-}
-
-function ensureSessionSelector(raw: string): SessionSelector {
-  return raw;
 }
 
 export function parseArgv(argv: string[]): Command {
@@ -180,7 +172,7 @@ export function parseArgv(argv: string[]): Command {
       return parseRun("last", "last", rest);
     case "--session": {
       const selector = requireValue(argv, 0, "--session");
-      return parseRun("explicit", ensureSessionSelector(selector), argv.slice(2));
+      return parseRun("explicit", selector, argv.slice(2));
     }
     case "sessions":
       return parseSessions(rest);
@@ -222,7 +214,7 @@ function parseSessions(argv: string[]): Command {
       if (rest.length !== 1) {
         throw usageError("`goat sessions fork` requires exactly one session selector");
       }
-      return { kind: "sessions.fork", sessionId: ensureSessionSelector(rest[0]) };
+      return { kind: "sessions.fork", sessionId: rest[0] };
     case "stop":
       if (rest.length !== 1) {
         throw usageError("`goat sessions stop` requires exactly one session id");
@@ -264,7 +256,7 @@ function parseRunsList(argv: string[]): Command {
 
   return {
     kind: "runs.list",
-    session: ensureSessionSelector(argv[1]),
+    session: argv[1],
   };
 }
 
@@ -279,7 +271,7 @@ function parseRunsShow(argv: string[]): Command {
 
   return {
     kind: "runs.show",
-    session: ensureSessionSelector(argv[1]),
+    session: argv[1],
     runId: argv[2],
   };
 }

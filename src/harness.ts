@@ -26,6 +26,7 @@ export type ToolContext = {
   cwd: string;
   planMode: boolean;
   config: GlobalConfig["tools"];
+  catastrophicOutputLimit: number;
   artifacts: ArtifactStore;
   runRoot: string;
   ensureMutationLock: () => Promise<void>;
@@ -361,7 +362,30 @@ export type ProcessResult = {
   exitCode: number;
   stdout: string;
   stderr: string;
+  outputLimitExceeded: boolean;
 };
+
+function terminateChildProcess(child: ReturnType<typeof spawn>, detached = false): void {
+  try {
+    if (detached && process.platform !== "win32" && child.pid) {
+      process.kill(-child.pid, "SIGTERM");
+      setTimeout(() => {
+        if (!child.killed && child.pid) {
+          process.kill(-child.pid, "SIGKILL");
+        }
+      }, 100).unref();
+      return;
+    }
+    child.kill("SIGTERM");
+    setTimeout(() => {
+      if (!child.killed) {
+        child.kill("SIGKILL");
+      }
+    }, 100).unref();
+  } catch {
+    // Ignore follow-up process termination failures and return the capped output we already captured.
+  }
+}
 
 export async function runProcess(
   program: string,
@@ -371,6 +395,7 @@ export async function runProcess(
     env?: Record<string, string>;
     detached?: boolean;
     abortSignal?: AbortSignal;
+    maxOutputBytes?: number;
   },
 ): Promise<ProcessResult> {
   return await new Promise((resolveResult, reject) => {
@@ -382,22 +407,62 @@ export async function runProcess(
       signal: options.abortSignal,
     });
 
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let outputBytes = 0;
+    let outputLimitExceeded = false;
+    let terminationRequested = false;
+
+    const requestTermination = () => {
+      if (terminationRequested) {
+        return;
+      }
+      terminationRequested = true;
+      terminateChildProcess(child, options.detached);
+    };
+
+    const appendChunk = (target: Buffer[], chunk: Buffer) => {
+      if (outputLimitExceeded) {
+        return;
+      }
+
+      if (options.maxOutputBytes === undefined) {
+        target.push(chunk);
+        return;
+      }
+
+      const remaining = options.maxOutputBytes - outputBytes;
+      if (remaining <= 0) {
+        outputLimitExceeded = true;
+        requestTermination();
+        return;
+      }
+
+      if (chunk.length <= remaining) {
+        target.push(chunk);
+        outputBytes += chunk.length;
+        return;
+      }
+
+      target.push(chunk.subarray(0, remaining));
+      outputBytes += remaining;
+      outputLimitExceeded = true;
+      requestTermination();
+    };
+
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      appendChunk(stdoutChunks, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      appendChunk(stderrChunks, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
     child.on("error", reject);
     child.on("close", (exitCode) => {
       resolveResult({
         exitCode: exitCode ?? 1,
-        stdout,
-        stderr,
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+        outputLimitExceeded,
       });
     });
   });

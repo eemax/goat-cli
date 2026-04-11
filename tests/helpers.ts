@@ -42,6 +42,11 @@ export const testToolsConfig: GlobalConfig["tools"] = {
   },
 };
 
+export const testArtifactsConfig: GlobalConfig["artifacts"] = {
+  preview_limit: 50 * 1024,
+  catastrophic_output_limit: 4096,
+};
+
 export async function createTempDir(prefix: string): Promise<string> {
   return mkdtemp(join(tmpdir(), prefix));
 }

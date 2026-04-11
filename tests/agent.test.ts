@@ -18,7 +18,8 @@ async function createToolContext() {
     cwd,
     planMode: false,
     config: testToolsConfig,
-    artifacts: new ArtifactStore(runRoot, join(runRoot, "artifacts")),
+    catastrophicOutputLimit: 1024,
+    artifacts: new ArtifactStore(join(runRoot, "artifacts")),
     runRoot,
     ensureMutationLock: async () => undefined,
   };
@@ -91,9 +92,8 @@ describe("runAgentLoop", () => {
     }
   });
 
-  test("records multiple tool calls, mixed argument parsing, and cumulative usage", async () => {
+  test("fails fast when provider emits non-object tool arguments", async () => {
     const toolContext = await createToolContext();
-    await writeFile(join(toolContext.cwd, "note.txt"), "hello\nworld\n");
     const provider = new FakeProvider([
       {
         response_id: "resp-1",
@@ -101,11 +101,6 @@ describe("runAgentLoop", () => {
         status: "completed",
         output_text: "I will inspect the file and validate args.",
         tool_calls: [
-          {
-            call_id: "call-good",
-            name: "read_file",
-            arguments: JSON.stringify({ path: "note.txt" }),
-          },
           {
             call_id: "call-bad",
             name: "read_file",
@@ -120,78 +115,30 @@ describe("runAgentLoop", () => {
         },
         raw_response: {} as any,
       },
-      {
-        response_id: "resp-2",
-        previous_response_id: "resp-1",
-        status: "completed",
-        output_text: "Done.",
-        tool_calls: [],
-        usage: {
-          input_tokens: 8,
-          output_tokens: 4,
-          reasoning_tokens: 0,
-          cached_input_tokens: 1,
-        },
-        raw_response: {} as any,
-      },
     ]);
 
-    const result = await runAgentLoop({
-      runId: "run-multi",
-      provider,
-      model: "gpt-5.4-mini",
-      instructions: "You are a coding agent.",
-      initialInput: [{ role: "user", content: "Inspect note.txt", type: "message" }],
-      tools: exportProviderTools(["read_file"]),
-      enabledTools: ["read_file"],
-      effort: "medium",
-      maxOutputTokens: 12000,
-      toolContext,
+    await expect(
+      runAgentLoop({
+        runId: "run-multi",
+        provider,
+        model: "gpt-5.4-mini",
+        instructions: "You are a coding agent.",
+        initialInput: [{ role: "user", content: "Inspect note.txt", type: "message" }],
+        tools: exportProviderTools(["read_file"]),
+        enabledTools: ["read_file"],
+        effort: "medium",
+        maxOutputTokens: 12000,
+        toolContext,
+      }),
+    ).rejects.toMatchObject({
+      cause: {
+        code: "PROVIDER_FAILURE",
+        details: {
+          code: "invalid_tool_arguments",
+          retryable: false,
+        },
+      },
     });
-
-    expect(result.final_text).toBe("Done.");
-    expect(result.usage).toEqual({
-      input_tokens: 18,
-      output_tokens: 9,
-      reasoning_tokens: 1,
-      cached_input_tokens: 3,
-    });
-    expect(provider.requests).toHaveLength(2);
-    expect(provider.requests[1]?.input).toHaveLength(2);
-
-    const assistantRequest = result.transcript.find(
-      (record) => record.kind === "message" && record.phase === "tool_request",
-    );
-    expect(assistantRequest).toMatchObject({
-      content: "I will inspect the file and validate args.",
-    });
-
-    const toolCalls = result.transcript.filter((record) => record.kind === "tool_call");
-    expect(toolCalls).toHaveLength(2);
-    expect(toolCalls[0]).toMatchObject({
-      tool_call_id: "call-good",
-      tool_name: "read_file",
-      arguments: { path: "note.txt" },
-    });
-    expect(toolCalls[1]).toMatchObject({
-      tool_call_id: "call-bad",
-      tool_name: "read_file",
-      arguments: {},
-    });
-
-    const toolResults = result.transcript.filter((record) => record.kind === "tool_result");
-    expect(toolResults).toHaveLength(2);
-    expect(toolResults[0]).toMatchObject({
-      ok: true,
-    });
-    expect(toolResults[1]).toMatchObject({
-      ok: false,
-    });
-    const failedEnvelope =
-      toolResults[1]?.kind === "tool_result" && toolResults[1].ok === false ? toolResults[1].envelope : null;
-    expect(failedEnvelope && failedEnvelope.ok === false ? failedEnvelope.error.code : null).toBe(
-      "INVALID_TOOL_ARGUMENTS",
-    );
   });
 
   test("wraps partial state when a later provider turn fails", async () => {

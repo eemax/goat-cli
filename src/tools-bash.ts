@@ -348,9 +348,33 @@ export async function runBashTool(
     const tokens = tokenizePlanCommand(input.command);
     validatePlanCommand(tokens);
     const [program, ...args] = tokens;
-    const result = await runProcess(program, args, { cwd: localContext.cwd, abortSignal: localContext.abortSignal });
+    const result = await runProcess(program, args, {
+      cwd: localContext.cwd,
+      abortSignal: localContext.abortSignal,
+      maxOutputBytes: localContext.catastrophicOutputLimit,
+    });
     const combined = [result.stdout, result.stderr].filter(Boolean).join(result.stdout && result.stderr ? "\n" : "");
     const artifactDecision = await maybeArtifactForText(localContext, "bash-plan", combined);
+    if (result.outputLimitExceeded) {
+      return {
+        ok: false,
+        summary: `Plan command ${program} exceeded the output limit.`,
+        data: {
+          command: input.command,
+          cwd: toRelativeDisplayPath(localContext, localContext.cwd),
+          stdout: artifactDecision.partial ? artifactDecision.preview : result.stdout,
+          stderr: result.stderr,
+          combined: artifactDecision.partial ? artifactDecision.preview : combined,
+          exit_code: result.exitCode,
+          artifact: artifactDecision.artifact,
+        },
+        error: {
+          code: "OUTPUT_LIMIT_EXCEEDED",
+          message: `command output exceeded catastrophic_output_limit (${localContext.catastrophicOutputLimit} bytes)`,
+          retryable: false,
+        },
+      };
+    }
     return {
       ok: result.exitCode === 0,
       summary: result.exitCode === 0 ? `Ran read-only plan command ${program}.` : `Plan command ${program} failed.`,
@@ -394,9 +418,30 @@ export async function runBashTool(
     env: input.env,
     detached,
     abortSignal: localContext.abortSignal,
+    maxOutputBytes: localContext.catastrophicOutputLimit,
   });
   const combined = [result.stdout, result.stderr].filter(Boolean).join(result.stdout && result.stderr ? "\n" : "");
   const artifactDecision = await maybeArtifactForText(localContext, "bash", combined);
+  if (result.outputLimitExceeded) {
+    return {
+      ok: false,
+      summary: `Shell command exceeded the output limit.`,
+      data: {
+        command: input.command,
+        cwd: toRelativeDisplayPath(localContext, localContext.cwd),
+        stdout: artifactDecision.partial ? artifactDecision.preview : result.stdout,
+        stderr: result.stderr,
+        combined: artifactDecision.partial ? artifactDecision.preview : combined,
+        exit_code: result.exitCode,
+        artifact: artifactDecision.artifact,
+      },
+      error: {
+        code: "OUTPUT_LIMIT_EXCEEDED",
+        message: `command output exceeded catastrophic_output_limit (${localContext.catastrophicOutputLimit} bytes)`,
+        retryable: false,
+      },
+    };
+  }
   if (result.exitCode !== 0) {
     return {
       ok: false,

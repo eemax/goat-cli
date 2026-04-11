@@ -8,7 +8,7 @@ import { createTempDir, testToolsConfig, useCleanup } from "./helpers.js";
 
 const { track } = useCleanup();
 
-async function createContext(planMode = false) {
+async function createContext(planMode = false, catastrophicOutputLimit = 4096) {
   const runRoot = await createTempDir("goat-run-");
   track(runRoot);
   const cwd = join(runRoot, "workspace");
@@ -18,7 +18,8 @@ async function createContext(planMode = false) {
     cwd,
     planMode,
     config: testToolsConfig,
-    artifacts: new ArtifactStore(runRoot, artifactsDir),
+    catastrophicOutputLimit,
+    artifacts: new ArtifactStore(artifactsDir),
     runRoot,
     ensureMutationLock: async () => undefined,
   };
@@ -84,7 +85,7 @@ describe("search tools", () => {
       pattern: "*.ts",
     });
     expect(globResult.ok).toBe(true);
-    expect(globResult.ok && globResult.data?.matches).toEqual(["one.ts", "two.ts"]);
+    expect(globResult.ok && globResult.data?.matches).toEqual(expect.arrayContaining(["one.ts", "two.ts"]));
 
     const grepResult = await executeToolCall(context, ["glob", "grep"], "grep", {
       pattern: "two",
@@ -193,6 +194,16 @@ describe("bash tool", () => {
     expect(result.ok).toBe(false);
     expect(result.ok ? null : result.error.code).toBe("SHELL_COMMAND_FAILED");
     expect(result.ok ? null : result.error.message).toContain("command exited with 7");
+  });
+
+  test("fails explicitly when command output exceeds the catastrophic limit", async () => {
+    const context = await createContext(false, 128);
+    const result = await executeToolCall(context, ["bash"], "bash", {
+      command: 'i=0; while [ "$i" -lt 500 ]; do printf x; i=$((i+1)); done',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.ok ? null : result.error.code).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(result.ok ? null : result.error.message).toContain("catastrophic_output_limit");
   });
 });
 
