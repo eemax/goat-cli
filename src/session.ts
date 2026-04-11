@@ -84,6 +84,7 @@ export function runPaths(sessionsDir: string, sessionId: string, runId: string):
  */
 export const LOCK_ACQUIRE_TIMEOUT_MS = 2_000;
 const LOCK_RETRY_BACKOFF_MS = [25, 50, 100, 200, 400] as const;
+const EMPTY_LOCK_STALE_AFTER_MS = 5_000;
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -111,10 +112,15 @@ async function removeStaleLock(path: string): Promise<boolean> {
   }
   const trimmed = raw.trim();
   if (trimmed.length === 0) {
-    // Empty lock file — a writer created the file with `open(..., "wx")` and
-    // then crashed (or is about to crash) before writing its PID. The window
-    // between open and the payload write is microseconds, so anything we see
-    // at rest is effectively stale. Reclaim it.
+    // Empty lock files are only reclaimed once they've sat untouched long
+    // enough to outlive a normal open(...) -> write(...) handoff.
+    const info = await stat(path).catch(() => null);
+    if (!info) {
+      return true;
+    }
+    if (Date.now() - info.mtimeMs < EMPTY_LOCK_STALE_AFTER_MS) {
+      return false;
+    }
     await rm(path, { force: true }).catch(() => undefined);
     return true;
   }
