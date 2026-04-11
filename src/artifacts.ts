@@ -13,10 +13,7 @@ export class ArtifactStore {
   private counter = 0;
   private totalBytes = 0;
 
-  public constructor(
-    readonly _runRoot: string,
-    private readonly artifactsDir: string,
-  ) {}
+  public constructor(private readonly artifactsDir: string) {}
 
   public stats(): { count: number; total_bytes: number } {
     return { count: this.counter, total_bytes: this.totalBytes };

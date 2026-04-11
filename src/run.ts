@@ -67,7 +67,7 @@ export async function executeRunCommand(
 
   const runId = newId();
   const runDir = await createRunDirectory(context.config.paths.sessions_dir, sessionMeta.session_id, runId);
-  const artifactStore = new ArtifactStore(runDir.root, runDir.artifacts);
+  const artifactStore = new ArtifactStore(runDir.artifacts);
   const startedAt = Date.now();
   const timeoutController = new AbortController();
   const timeoutHandle = setTimeout(

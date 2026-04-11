@@ -19,7 +19,7 @@ async function createContext(planMode = false, catastrophicOutputLimit = 4096) {
     planMode,
     config: testToolsConfig,
     catastrophicOutputLimit,
-    artifacts: new ArtifactStore(runRoot, artifactsDir),
+    artifacts: new ArtifactStore(artifactsDir),
     runRoot,
     ensureMutationLock: async () => undefined,
   };

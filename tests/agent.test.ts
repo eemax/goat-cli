@@ -19,7 +19,7 @@ async function createToolContext() {
     planMode: false,
     config: testToolsConfig,
     catastrophicOutputLimit: 1024,
-    artifacts: new ArtifactStore(runRoot, join(runRoot, "artifacts")),
+    artifacts: new ArtifactStore(join(runRoot, "artifacts")),
     runRoot,
     ensureMutationLock: async () => undefined,
   };

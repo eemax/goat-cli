@@ -51,7 +51,6 @@ const rawModelsSchema = z
         z
           .object({
             id: z.string().min(1),
-            provider: z.literal("openai_responses").optional(),
             provider_model: z.string().min(1).optional(),
             aliases: z.array(z.string().min(1)).optional(),
             context_window: tokenSchema.nullable().optional(),
@@ -107,7 +106,6 @@ export async function loadModelCatalog(roots: ConfigRoots): Promise<ModelCatalog
     for (const model of layer.models) {
       byId.set(model.id, {
         id: model.id,
-        provider: "openai_responses",
         provider_model: model.provider_model ?? model.id,
         aliases: model.aliases ?? [],
         context_window: model.context_window ?? null,

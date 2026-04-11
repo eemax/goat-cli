@@ -333,7 +333,6 @@ export type GlobalConfig = {
 
 export type ModelDef = {
   id: string;
-  provider: "openai_responses";
   provider_model: string;
   aliases: string[];
   context_window: number | null;
