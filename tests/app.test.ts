@@ -508,6 +508,58 @@ system_prompt = "You are the reviewer."
     expect(summary.error.message).toBe("boom");
   });
 
+  test("fails clearly when provider emits invalid tool arguments", async () => {
+    const { repoRoot, homeRoot } = await createRepoFixture({
+      agentToml: `
+name = "coder"
+default_model = "mini"
+enabled_tools = ["read_file"]
+system_prompt = "You are the coding agent."
+`,
+    });
+    const provider = new FakeProvider([
+      {
+        response_id: "resp-bad-args-1",
+        previous_response_id: null,
+        status: "completed",
+        output_text: "I will inspect the workspace.",
+        tool_calls: [
+          {
+            call_id: "call-bad-args",
+            name: "read_file",
+            arguments: `"note.txt"`,
+          },
+        ],
+        usage: {
+          input_tokens: 10,
+          output_tokens: 4,
+          reasoning_tokens: 0,
+          cached_input_tokens: 0,
+        },
+        raw_response: {} as any,
+      },
+    ]);
+
+    const result = await runCli(["new", "inspect the repo"], provider, repoRoot, homeRoot);
+    expect(result.exitCode).toBe(ExitCode.providerFailure);
+    expect(result.stderr).toContain("provider emitted non-object tool arguments");
+
+    const sessionsDir = join(homeRoot, "sessions");
+    const sessionId = (await readdir(sessionsDir))[0]!;
+    const runId = (await readdir(join(sessionsDir, sessionId, "runs")))[0]!;
+    const runDir = join(sessionsDir, sessionId, "runs", runId);
+    const transcript = await readFile(join(runDir, "transcript.jsonl"), "utf8");
+    const providerLog = await readFile(join(runDir, "provider.jsonl"), "utf8");
+    const summary = JSON.parse(await readFile(join(runDir, "summary.json"), "utf8"));
+
+    expect(transcript).toContain('"kind":"run_finished"');
+    expect(transcript).not.toContain('"kind":"tool_call"');
+    expect(providerLog).toContain('"kind":"provider_error"');
+    expect(providerLog).toContain('"error_code":"invalid_tool_arguments"');
+    expect(summary.status).toBe("failed");
+    expect(summary.error.code).toBe("PROVIDER_FAILURE");
+  });
+
   test("times out long provider turns and records a timed-out run summary", async () => {
     const { repoRoot, homeRoot } = await createRepoFixture({
       agentToml: `

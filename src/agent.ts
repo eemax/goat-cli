@@ -10,6 +10,7 @@ import {
   serializeProviderRequestForDebug,
   summarizeProviderInput,
 } from "./debug.js";
+import { providerError } from "./errors.js";
 import { executeToolCall, type ToolContext } from "./harness.js";
 import type { ProviderClient, ProviderInputItem, ProviderTurnResult } from "./provider.js";
 import type { ProviderUsage, ToolEnvelope, TranscriptRecord } from "./types.js";
@@ -43,6 +44,31 @@ function toolCallOutput(callId: string, envelope: ToolEnvelope): ResponseFunctio
     output: JSON.stringify(envelope),
     status: "completed",
   };
+}
+
+function parseToolArguments(value: string): Record<string, unknown> {
+  if (!value.trim()) {
+    throw providerError("provider emitted empty tool arguments", {
+      code: "invalid_tool_arguments",
+      retryable: false,
+    });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw providerError("provider emitted invalid JSON for tool arguments", {
+      code: "invalid_tool_arguments",
+      retryable: false,
+    });
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw providerError("provider emitted non-object tool arguments", {
+      code: "invalid_tool_arguments",
+      retryable: false,
+    });
+  }
+  return parsed as Record<string, unknown>;
 }
 
 export async function runAgentLoop(params: {
@@ -148,7 +174,7 @@ export async function runAgentLoop(params: {
           tool_calls: turn.tool_calls.map((call) => ({
             id: call.call_id,
             name: call.name,
-            arguments: safeParseArguments(call.arguments),
+            arguments: parseToolArguments(call.arguments),
           })),
         });
       }
@@ -160,7 +186,7 @@ export async function runAgentLoop(params: {
 
       const toolOutputs: ResponseFunctionToolCallOutputItem[] = [];
       for (const call of turn.tool_calls) {
-        const parsedArguments = safeParseArguments(call.arguments);
+        const parsedArguments = parseToolArguments(call.arguments);
         await params.debug?.emit("tool", "start", {
           request_index: requestIndex,
           tool_call_id: call.call_id,
@@ -228,17 +254,5 @@ export async function runAgentLoop(params: {
       provider_turns: providerTurns,
       transcript,
     });
-  }
-}
-
-function safeParseArguments(value: string): Record<string, unknown> {
-  if (!value.trim()) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(value);
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
   }
 }

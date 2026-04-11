@@ -85,6 +85,7 @@ export async function executeRunCommand(
     cwd: effectiveCwd,
     planMode: command.options.plan,
     config: context.config.tools,
+    catastrophicOutputLimit: context.config.artifacts.catastrophic_output_limit,
     artifacts: artifactStore,
     runRoot: runDir.root,
     abortSignal: timeoutController.signal,

@@ -194,6 +194,16 @@ describe("bash tool", () => {
     expect(result.ok ? null : result.error.code).toBe("SHELL_COMMAND_FAILED");
     expect(result.ok ? null : result.error.message).toContain("command exited with 7");
   });
+
+  test("fails explicitly when command output exceeds the catastrophic limit", async () => {
+    const context = await createContext();
+    const result = await executeToolCall(context, ["bash"], "bash", {
+      command: "python - <<'PY'\nprint('x' * 500)\nPY",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.ok ? null : result.error.code).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(result.ok ? null : result.error.message).toContain("catastrophic_output_limit");
+  });
 });
 
 describe("patch and stub tools", () => {

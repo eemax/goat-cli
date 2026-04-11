@@ -18,10 +18,18 @@ export async function runGlobTool(
 ): Promise<ToolEnvelope> {
   const root = resolveToolPath(context, input.path ?? ".");
   await ensurePathExists(root, "directory");
-  const result = await runProcess("rg", ["--files", "--hidden", "-g", "!.git", "-g", input.pattern], {
-    cwd: root,
-    abortSignal: context.abortSignal,
-  });
+  const result = await runProcess(
+    "rg",
+    ["--files", "--hidden", "-g", "!.git", "-g", input.pattern],
+    {
+      cwd: root,
+      abortSignal: context.abortSignal,
+      maxOutputBytes: context.catastrophicOutputLimit,
+    },
+  );
+  if (result.outputLimitExceeded) {
+    throw toolError(`rg output exceeded catastrophic_output_limit (${context.catastrophicOutputLimit} bytes)`);
+  }
   if (result.exitCode !== 0) {
     throw toolError(`rg failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`);
   }
@@ -73,7 +81,14 @@ export async function runGrepTool(
     args.push("-i");
   }
   args.push(input.pattern, ".");
-  const result = await runProcess("rg", args, { cwd: root, abortSignal: context.abortSignal });
+  const result = await runProcess("rg", args, {
+    cwd: root,
+    abortSignal: context.abortSignal,
+    maxOutputBytes: context.catastrophicOutputLimit,
+  });
+  if (result.outputLimitExceeded) {
+    throw toolError(`rg output exceeded catastrophic_output_limit (${context.catastrophicOutputLimit} bytes)`);
+  }
   if (![0, 1].includes(result.exitCode)) {
     throw toolError(`rg failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`);
   }
