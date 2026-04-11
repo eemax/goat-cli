@@ -365,10 +365,7 @@ export type ProcessResult = {
   outputLimitExceeded: boolean;
 };
 
-function terminateChildProcess(
-  child: ReturnType<typeof spawn>,
-  detached = false,
-): void {
+function terminateChildProcess(child: ReturnType<typeof spawn>, detached = false): void {
   try {
     if (detached && process.platform !== "win32" && child.pid) {
       process.kill(-child.pid, "SIGTERM");

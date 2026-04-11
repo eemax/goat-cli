@@ -8,7 +8,7 @@ import { createTempDir, testToolsConfig, useCleanup } from "./helpers.js";
 
 const { track } = useCleanup();
 
-async function createContext(planMode = false) {
+async function createContext(planMode = false, catastrophicOutputLimit = 4096) {
   const runRoot = await createTempDir("goat-run-");
   track(runRoot);
   const cwd = join(runRoot, "workspace");
@@ -18,6 +18,7 @@ async function createContext(planMode = false) {
     cwd,
     planMode,
     config: testToolsConfig,
+    catastrophicOutputLimit,
     artifacts: new ArtifactStore(runRoot, artifactsDir),
     runRoot,
     ensureMutationLock: async () => undefined,
@@ -196,9 +197,9 @@ describe("bash tool", () => {
   });
 
   test("fails explicitly when command output exceeds the catastrophic limit", async () => {
-    const context = await createContext();
+    const context = await createContext(false, 128);
     const result = await executeToolCall(context, ["bash"], "bash", {
-      command: "python - <<'PY'\nprint('x' * 500)\nPY",
+      command: 'i=0; while [ "$i" -lt 500 ]; do printf x; i=$((i+1)); done',
     });
     expect(result.ok).toBe(false);
     expect(result.ok ? null : result.error.code).toBe("OUTPUT_LIMIT_EXCEEDED");

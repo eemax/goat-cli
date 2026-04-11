@@ -18,15 +18,11 @@ export async function runGlobTool(
 ): Promise<ToolEnvelope> {
   const root = resolveToolPath(context, input.path ?? ".");
   await ensurePathExists(root, "directory");
-  const result = await runProcess(
-    "rg",
-    ["--files", "--hidden", "-g", "!.git", "-g", input.pattern],
-    {
-      cwd: root,
-      abortSignal: context.abortSignal,
-      maxOutputBytes: context.catastrophicOutputLimit,
-    },
-  );
+  const result = await runProcess("rg", ["--files", "--hidden", "-g", "!.git", "-g", input.pattern], {
+    cwd: root,
+    abortSignal: context.abortSignal,
+    maxOutputBytes: context.catastrophicOutputLimit,
+  });
   if (result.outputLimitExceeded) {
     throw toolError(`rg output exceeded catastrophic_output_limit (${context.catastrophicOutputLimit} bytes)`);
   }
