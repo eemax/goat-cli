@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { normalize, relative, resolve } from "node:path";
+import { type Tool as AgentsTool, tool as agentsTool } from "@openai/agents";
 import { z } from "zod";
 
 import { type ArtifactStore, createPreview, PREVIEW_CHAR_LIMIT } from "./artifacts.js";
@@ -19,6 +20,19 @@ type ToolDefinition = {
   access: ToolAccessClass;
   schema: z.ZodTypeAny;
   handler: (context: ToolContext, input: unknown) => Promise<ToolEnvelope>;
+};
+
+export type ToolExecutionEvent = {
+  tool_call_id: string | null;
+  tool_name: string;
+  arguments: unknown;
+  duration_ms?: number;
+  envelope?: ToolEnvelope;
+};
+
+export type ToolExecutionObserver = {
+  onStart?: (event: ToolExecutionEvent) => void | Promise<void>;
+  onFinish?: (event: ToolExecutionEvent) => void | Promise<void>;
 };
 
 /**
@@ -294,6 +308,45 @@ export function exportProviderTools(enabledTools: string[]): ProviderTool[] {
       strict: true,
       parameters: zodToJsonSchema(tool.schema),
     };
+  });
+}
+
+export function exportAgentsSdkTools(
+  enabledTools: string[],
+  context: ToolContext,
+  observer?: ToolExecutionObserver,
+): AgentsTool<ToolContext>[] {
+  return enabledTools.map((name) => {
+    const definition = toolRegistry.get(name);
+    if (!definition) {
+      throw toolError(`unknown tool \`${name}\``);
+    }
+
+    return agentsTool({
+      name: definition.id,
+      description: definition.description,
+      parameters: zodToJsonSchema(definition.schema) as never,
+      strict: true,
+      execute: async (input, _runContext, details) => {
+        const callId = details?.toolCall?.callId ?? null;
+        await observer?.onStart?.({
+          tool_call_id: callId,
+          tool_name: definition.id,
+          arguments: input,
+        });
+        const startedAt = performance.now();
+        const envelope = await executeToolCall(context, enabledTools, definition.id, input);
+        const durationMs = Number((performance.now() - startedAt).toFixed(1));
+        await observer?.onFinish?.({
+          tool_call_id: callId,
+          tool_name: definition.id,
+          arguments: input,
+          duration_ms: durationMs,
+          envelope,
+        });
+        return JSON.stringify(envelope);
+      },
+    });
   });
 }
 

@@ -11,7 +11,7 @@ Goat persists durable state to the local filesystem. The model separates:
 ## On-disk layout
 
 ```
-<sessions_dir>/                         Default: ~/.goat/sessions/
+<sessions_dir>/                         Default: <highest-priority-config-root>/sessions/
   <session-id>/                         Lowercase ULID
     meta.json                           Sticky session state
     compaction.json                     Structured session summary

@@ -43,7 +43,7 @@ Important intent:
 - Modular: providers, tools, and higher-level products should layer on top of stable interfaces.
 - Scriptable: stdout must stay machine-safe for the final reply, while stderr carries progress and diagnostics.
 - Auditable: every run should leave behind enough artifacts to explain what happened.
-- Extensible: future features like skills, web tooling, and subagents should fit without warping the core model.
+- Extensible: skills, scenarios, future web tooling, and subagents should fit without warping the core model.
 
 ## Explicit Non-Goals For V1
 
@@ -66,15 +66,18 @@ The runtime is shaped more like `headless-agent` than `agent-commander` at the C
 - `goat sessions fork <id|last>`
 - `goat runs list [--session <id|last>]`
 - `goat runs show --session <id|last> <run-id>`
+- `goat compact session <id|last>`
 - `goat agents`
 - `goat roles`
 - `goat prompts`
+- `goat skills`
+- `goat scenarios`
 - `goat version`
 - `goat doctor`
 
 Internally, the execution loop and tool harness borrow the stronger patterns from `agent-commander`:
 
-- OpenAI Responses API tool loop
+- OpenAI Agents SDK tool loop backed by the Responses API
 - normalized tool envelopes
 - explicit harness registry
 - clear room for subagents later
@@ -84,12 +87,12 @@ Internally, the execution loop and tool harness borrow the stronger patterns fro
 ### Included
 
 - durable sessions and runs
-- model, agent, role, and prompt definitions loaded from repo or home roots
-- OpenAI Responses API over HTTP only
+- model, agent, role, prompt, skill, and scenario definitions loaded from the global root stack
+- OpenAI Agents SDK runtime backed by the Responses API
 - local tool harness
 - custom runtime-owned compaction
 - `--plan` mode
-- verbose stderr progress and streaming
+- numbered verbose/debug stderr events without assistant-text streaming
 - per-run transcripts, provider metadata, and artifacts
 - strict session conflict handling
 
@@ -117,11 +120,12 @@ Internally, the execution loop and tool harness borrow the stronger patterns fro
 
 These tools should have real type definitions, config surface area, and harness seams in V1, but they may return a structured `UNIMPLEMENTED_IN_V1` failure until implemented.
 
-### Reserved But Not Expanded Yet
+### Skills And Scenarios
 
-- `skills/` root in the repo and home configuration root
+- `skills/` folders contain agent-invoked `SKILL.md` files
+- `scenarios/` contains sequential scenario definitions
 
-V1 should resolve and reserve the concept cleanly, but should not build runtime behavior around it yet.
+V1 resolves both surfaces through the global root stack. Skills are enabled per agent; scenarios run each step in a fresh session.
 
 ## Core Principles
 
@@ -150,13 +154,13 @@ Stdout should contain only:
 - the resolved session id for `goat sessions last`
 - explicit list/show command output
 
-Everything else goes to stderr:
+Stderr is reserved for errors and optional progress/diagnostics:
 
-- streaming deltas
-- verbose logs
-- tool progress
-- debug information
-- session creation notices during `goat new` or `goat --session new`
+- validation failures, provider errors, and tool errors
+- numbered progress events when `--verbose` is set
+- numbered diagnostic events when `--debug` or `--debug-json` is set
+
+Assistant text deltas and final replies are not streamed to stderr.
 
 ### 4. The CLI Is The Protocol
 
@@ -174,21 +178,21 @@ That means:
 For a prompt run:
 
 1. Parse CLI arguments.
-2. Resolve configuration roots.
+2. Resolve the ordered global configuration root stack.
 3. Load global config.
 4. Create or resolve the target session.
-5. Resolve agent, role, one-turn prompt, and working directory.
+5. Resolve agent, role, one-turn prompt, skill invocations, and working directory.
 6. Validate that the effective working directory exists and is a directory.
 7. Read stdin if present, enforcing the configured size and UTF-8 rules.
 8. Assemble the would-be provider input from system layers and replayable session history.
-9. If a conservative pre-send estimate of the initial provider request would exceed the effective `compact_at_tokens` budget, compact durable history first, then reassemble.
+9. If `--compact` is set or a conservative pre-send estimate of the initial provider request would exceed the effective `compact_at_tokens` budget, compact durable history first, then reassemble.
 10. Create the prompt run directory.
 11. Execute the assistant/tool loop, compacting again only at safe points when a continuation request’s conservative pre-send estimate would exceed that budget.
 12. Persist run transcript, provider metadata, and summary.
 13. Project replayable records and any updated compaction state back into session history.
 14. Print only the final assistant text to stdout.
 
-Non-run commands stop earlier and never enter the provider loop.
+Scenario runs expand into sequential prompt runs in fresh sessions. Non-provider commands stop earlier and never enter the assistant/tool loop.
 
 ## Responses Loop Ownership
 
@@ -211,7 +215,7 @@ This keeps cross-run resume durable and provider-independent.
 
 ### Within one run
 
-Within a single run, Goat should use OpenAI's `previous_response_id` to continue the Responses API loop across tool turns.
+Within a single run, the default runtime uses the OpenAI Agents SDK, which owns the model/tool loop and continues Responses API turns under the hood.
 
 That gives Goat:
 
@@ -241,9 +245,9 @@ Rules:
 
 ### Architectural implication
 
-`src/provider` should expose a per-run continuation handle.
+`src/agents-sdk` should normalize SDK responses into Goat provider-turn records.
 
-For V1 OpenAI HTTP, that continuation handle is `previous_response_id`.
+For the legacy `ProviderClient` path, the continuation handle is `previous_response_id`.
 
 Future providers may implement a different continuation handle or none at all, but the rest of Goat should still think in terms of:
 
@@ -271,7 +275,7 @@ The codebase should favor a small number of direct modules with explicit ownersh
 
 ### `src/config`
 
-- discover repo and home roots
+- discover the ordered global root stack
 - load config files
 - normalize paths
 - validate strict schemas
@@ -282,7 +286,8 @@ The codebase should favor a small number of direct modules with explicit ownersh
 - load agents
 - load roles
 - load prompts
-- reserve the loading surface for skills
+- load scenarios
+- validate agent skill settings
 
 ### `src/session`
 
@@ -295,24 +300,26 @@ The codebase should favor a small number of direct modules with explicit ownersh
 ### `src/prompt`
 
 - assemble the provider prompt stack
-- combine agent prompt, optional role overlay, optional compaction summary, retained raw replay, one-turn prompt text, user message, and stdin
+- combine agent prompt, optional role overlay, optional compaction summary, retained raw replay, one-turn prompt text, requested skill invocations, user message, and stdin
 - conservatively estimate the next provider request size for pre-send compaction only; see [Token usage and pre-send estimation](#token-usage-and-pre-send-estimation)
 
 ### `src/provider`
 
-- define provider interface
-- define transport interface
-- implement OpenAI Responses HTTP adapter
+- define the legacy provider interface
+- implement the low-level Responses adapter for injected tests and compatibility
 - normalize usage and response records
 - isolate provider-specific request and response handling
 
-The provider boundary should own within-run continuation state such as `previous_response_id`, while `src/session` owns cross-run durability.
+### `src/agents-sdk`
 
-V1 has only one provider implementation and one transport implementation, but both boundaries should still be real.
+- adapt the OpenAI Agents SDK runtime
+- map SDK result items into Goat transcript records
+- normalize usage and response records
+- isolate SDK-specific request and response handling
 
 ### `src/agent`
 
-- provider/tool loop
+- legacy provider/tool loop
 - tool-call execution sequencing
 - streaming callbacks
 - loop termination rules
@@ -325,6 +332,18 @@ V1 has only one provider implementation and one transport implementation, but bo
 - shared limits and guardrails
 - subprocess execution and cleanup for `bash`
 - output envelope normalization
+
+### `src/skills`
+
+- load skill folders
+- validate `SKILL.md` frontmatter
+- render available skills and one-turn invocations
+
+### `src/scenarios`
+
+- load scenario chains
+- expand scenario templates
+- run each step in a fresh session
 
 ### `src/tools`
 
@@ -348,12 +367,13 @@ V1 has only one provider implementation and one transport implementation, but bo
 
 ## Configuration Roots
 
-Goat should resolve configuration from exactly two roots:
+Goat resolves configuration from an ordered global root stack:
 
-1. repo root
-2. `~/.goat/`
+1. `~/goat-cli/`
+2. `~/.config/goat/`
+3. `$GOAT_HOME_DIR`, when set
 
-Resolution order should be home root first, then repo root, with repo values overriding home values.
+Later roots override earlier roots. Repo-local discovery, cwd markers, and `~/.goat/` are ignored.
 
 `--cwd` affects tool execution and sticky session cwd only. It must not affect definition discovery.
 
@@ -368,7 +388,8 @@ package.json   Bun package manifest
 agents/        Agent definitions
 roles/         Role definitions
 prompts/       Prompt definitions and prompt text
-skills/        Reserved root for future skill assets
+skills/        Skill folders containing SKILL.md
+scenarios/     Scenario definitions
 docs/          Architecture and CLI docs
 src/           Runtime implementation
 tests/         Contract and integration coverage
@@ -376,7 +397,7 @@ tests/         Contract and integration coverage
 
 ## On-Disk Session Model
 
-Sessions should live under a configurable `sessions_dir`, defaulting to `~/.goat/sessions`.
+Sessions should live under a configurable `sessions_dir`, defaulting to `<highest-priority-config-root>/sessions`.
 
 Session ids and run ids are canonical lowercase ULIDs.
 
@@ -527,13 +548,13 @@ Prompt assembly order should be:
 2. role overlay appended after the agent prompt, if present
 3. rendered session compaction summary as structured checkpoint context, if present
 4. retained raw replay history from `messages.jsonl`
-5. current user message, prefixed by named prompt text if present
-6. stdin as a second user message, if present
+5. one-shot skill invocation text, if requested
+6. current user message, prefixed by named prompt text if present
+7. stdin as a second user message, if present
 
 V1 should keep prompt replay simple and explicit:
 
 - no hidden retrieval
-- no skill injection yet
 - pre-send compaction uses a **conservative** estimate of the fully assembled next request (see [Token usage and pre-send estimation](#token-usage-and-pre-send-estimation)); reported usage from the API is the source of truth after each successful response
 - if that pre-send estimate would exceed the effective budget derived from `compact_at_tokens`, Goat compacts lower-priority raw context first instead of sending an oversized request
 - durable cross-run history is compacted before the current live loop
@@ -575,17 +596,17 @@ Compaction is not provider-managed context compression. Goat owns both the durab
 
 V1 uses:
 
-- OpenAI Responses API
-- HTTP transport only
-- streamed responses
+- OpenAI Agents SDK runtime
+- Responses API under the hood
+- streaming SDK execution for event handling, without stderr assistant-text deltas
 
 Provider concerns to isolate:
 
-- provider adapter boundary
-- transport adapter boundary
+- Agents SDK adapter boundary
+- legacy provider adapter boundary for injected tests
 - request construction
 - tool schema export
-- streaming event handling
+- SDK event handling
 - usage normalization
 - within-run continuation via `previous_response_id`
 - retry policy

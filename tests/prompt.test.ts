@@ -12,6 +12,17 @@ const agent: AgentDef = {
   compact_at_tokens: 180000,
   run_timeout: 7200,
   enabled_tools: ["read_file"],
+  skills_enabled: true,
+  skills_path: "/tmp/skills",
+  skills: [
+    {
+      id: "research",
+      name: "Research",
+      description: "Find facts & summarize.",
+      path: "/tmp/skills/research/SKILL.md",
+      content: "---\nname: Research\ndescription: Find facts & summarize.\n---\n\n# Research\n",
+    },
+  ],
   system_prompt: "You are the coding agent.",
   source_path: "/tmp/agents/coder.toml",
 };
@@ -71,6 +82,7 @@ describe("assemblePrompt", () => {
       agent,
       role,
       prompt,
+      skills: [agent.skills[0]!],
       compaction,
       sessionMessages: [sessionMessage("user", "Earlier request"), sessionMessage("assistant", "Earlier answer")],
       userMessage: "Inspect the project",
@@ -79,13 +91,16 @@ describe("assemblePrompt", () => {
 
     expect(result.instructions).toContain(agent.system_prompt);
     expect(result.instructions).toContain(role.system_prompt);
+    expect(result.instructions).toContain("<available_skills>");
+    expect(result.instructions).toContain('<skill name="Research" path="/tmp/skills/research/SKILL.md">');
     expect(result.instructions).toContain("Session checkpoint:");
     expect(result.input).toEqual([
       { role: "user", content: "Earlier request" },
       { role: "assistant", content: "Earlier answer" },
       {
         role: "user",
-        content: "Summarize the repository before changing anything.\n\nInspect the project",
+        content:
+          "Summarize the repository before changing anything.\n\nOne-shot skill invocation: /research\nSkill name: Research\nSkill description: Find facts & summarize.\nSkill file (full content):\n---\nname: Research\ndescription: Find facts & summarize.\n---\n\n# Research\n\nApply this skill only for this request. Do not persist skill activation across future turns unless the user invokes it again.\n\nInspect the project",
       },
       { role: "user", content: "Extra stdin" },
     ]);
@@ -93,17 +108,24 @@ describe("assemblePrompt", () => {
   });
 
   test("omits optional layers when not provided", () => {
+    const agentWithoutSkills: AgentDef = {
+      ...agent,
+      skills_enabled: false,
+      skills_path: null,
+      skills: [],
+    };
     const result = assemblePrompt({
-      agent,
+      agent: agentWithoutSkills,
       role: null,
       prompt: null,
+      skills: [],
       compaction: null,
       sessionMessages: [],
       userMessage: "Inspect the project",
       stdinText: null,
     });
 
-    expect(result.instructions).toBe(agent.system_prompt);
+    expect(result.instructions).toBe(`${agent.system_prompt}\n\n${"<available_skills>\n</available_skills>"}`);
     expect(result.input).toEqual([{ role: "user", content: "Inspect the project" }]);
     expect(result.compaction_checkpoint).toBeNull();
   });

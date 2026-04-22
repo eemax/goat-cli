@@ -2,7 +2,7 @@
 
 A session-first, non-interactive agent harness CLI.
 
-Goat is a durable core for AI agent runs. It manages sessions, persists full audit trails, and executes tool-equipped agents through the OpenAI Responses API. Other interfaces -- shell scripts, local UIs, editors, remote supervisors -- can attach on top.
+Goat is a durable core for AI agent runs. It manages sessions, persists full audit trails, and executes tool-equipped agents through the OpenAI Agents SDK on top of the Responses API. Other interfaces -- shell scripts, local UIs, editors, remote supervisors -- can attach on top.
 
 ## Quick start
 
@@ -32,8 +32,9 @@ Once installed globally (`bun link` or added to `$PATH`), replace `bun run src/m
 - **Durable sessions** -- every run is persisted to disk with full transcripts, provider metadata, and terminal summaries. Crashes, interrupts, and upgrades leave inspectable state behind.
 - **Local tool harness** -- bash, file I/O, search (grep/glob via `rg`), and a structured patch tool. All tools return normalized JSON envelopes.
 - **Session-first model** -- sessions carry sticky settings (agent, role, model, effort, cwd). Fork, stop, and resume without a background service.
-- **Custom compaction** -- runtime-owned context management keeps long sessions within model limits.
-- **Scriptable** -- stdout is reserved for the final assistant reply. Everything else goes to stderr. Exit codes are stable and documented.
+- **Custom compaction** -- runtime-owned context management keeps long sessions within model limits, with explicit maintenance runs when requested.
+- **Skills and scenarios** -- agents can expose one-shot skills, and scenario chains can run multi-agent workflows in fresh sessions.
+- **Scriptable** -- stdout is reserved for command results. Progress, diagnostics, and errors use stderr. Exit codes are stable and documented.
 
 ## Commands
 
@@ -44,10 +45,13 @@ goat --session <id> [options] "msg"  # Target a specific session
 
 goat sessions new|last|list|show|fork|stop
 goat runs list|show
+goat compact session <id|last>          # Run deterministic compaction
 
 goat agents                          # List agent definitions
 goat roles                           # List role definitions
 goat prompts                         # List prompt definitions
+goat skills                          # List resolved skills grouped by agent
+goat scenarios                       # List scenario definitions
 goat version                         # Print version
 goat doctor                          # Preflight checks
 ```
@@ -60,13 +64,17 @@ goat doctor                          # Preflight checks
 --role <name>       Apply a sticky role overlay
 --no-role           Clear the stored role
 --prompt <name>     One-turn prompt prefix (not sticky)
+--skill <id>        Invoke a one-shot skill (repeatable, not sticky)
+--compact           Compact session history before the prompt turn
+--scenario <id>     Run a scenario chain in fresh sessions
 --model <name>      Override model (sticky)
 --effort <level>    Reasoning effort: none|minimal|low|medium|high|xhigh
 --timeout <dur>     Run timeout override (not sticky)
 --plan              Plan mode: mutating tools describe actions without executing
 --cwd <path>        Working directory for tools (sticky)
---verbose           Stream progress and assistant text to stderr
+--verbose           Emit numbered progress events to stderr
 --debug             Debug diagnostics (implies --verbose)
+--debug-json        Emit numbered debug events as JSON lines
 ```
 
 ## Project layout
@@ -78,6 +86,8 @@ package.json        Bun package manifest
 agents/             Agent definitions (.toml + .md system prompts)
 roles/              Role overlay definitions
 prompts/            Named one-turn prompt definitions
+skills/             Skill folders containing SKILL.md
+scenarios/          Scenario definitions
 src/                Runtime implementation (TypeScript)
 tests/              Test suite
 docs/               Documentation
@@ -85,12 +95,13 @@ docs/               Documentation
 
 ## Configuration
 
-Goat resolves config from two roots:
+Goat resolves config from an ordered global root stack:
 
-1. **Repo root** -- nearest ancestor containing `goat.toml` or `.goat`
-2. **Home root** -- `~/.goat/`
+1. `~/goat-cli/`
+2. `~/.config/goat/`
+3. `$GOAT_HOME_DIR`, when set
 
-Repo values override home values. See [docs/configuration.md](docs/configuration.md) for the full reference.
+Later roots override earlier roots. Repo-local discovery and `~/.goat/` are ignored. See [docs/configuration.md](docs/configuration.md) for the full reference.
 
 ## Tools
 
@@ -112,7 +123,7 @@ See [docs/tools.md](docs/tools.md) for full schemas and behavior.
 
 ## Sessions and persistence
 
-Sessions live under `~/.goat/sessions/` by default. Each session contains:
+Sessions live under `<highest-priority-config-root>/sessions/` by default. Each session contains:
 
 - `meta.json` -- sticky settings, revision, usage
 - `messages.jsonl` -- compact replay history

@@ -3,8 +3,9 @@ import { basename, dirname, join, normalize, resolve } from "node:path";
 import { z } from "zod";
 import { effortSchema, exists, parseTomlFile, parseWithSchema } from "./config.js";
 import { configError } from "./errors.js";
+import { loadSkillsFromDirectory } from "./skills.js";
 import { isKnownToolId } from "./tool-ids.js";
-import type { AgentDef, ConfigRoots, ModelDef, PromptDef, RoleDef } from "./types.js";
+import type { AgentDef, ConfigRoots, ModelDef, PromptDef, RoleDef, ScenarioDef } from "./types.js";
 import { timeSchema, tokenSchema } from "./units.js";
 
 type LayeredFile = {
@@ -28,17 +29,13 @@ async function listTomlFiles(directory: string): Promise<LayeredFile[]> {
 
 export async function listDefinitionFiles(
   roots: ConfigRoots,
-  kind: "agents" | "roles" | "prompts",
+  kind: "agents" | "roles" | "prompts" | "scenarios",
 ): Promise<LayeredFile[]> {
   const byName = new Map<string, LayeredFile>();
-  const homeFiles = await listTomlFiles(join(roots.homeRoot, kind));
-  const repoFiles = roots.repoRoot ? await listTomlFiles(join(roots.repoRoot, kind)) : [];
-
-  for (const file of homeFiles) {
-    byName.set(file.name, file);
-  }
-  for (const file of repoFiles) {
-    byName.set(file.name, file);
+  for (const root of roots.configRoots) {
+    for (const file of await listTomlFiles(join(root, kind))) {
+      byName.set(file.name, file);
+    }
   }
 
   return [...byName.values()].sort((left, right) => left.name.localeCompare(right.name));
@@ -88,10 +85,7 @@ export type ModelCatalog = {
 
 export async function loadModelCatalog(roots: ConfigRoots): Promise<ModelCatalog> {
   const layers = [];
-  for (const root of [roots.homeRoot, roots.repoRoot]) {
-    if (!root) {
-      continue;
-    }
+  for (const root of roots.configRoots) {
     const path = join(root, "models.toml");
     if (!(await exists(path))) {
       continue;
@@ -177,6 +171,13 @@ const rawAgentSchema = z
     compact_at_tokens: tokenSchema.optional(),
     run_timeout: timeSchema.optional(),
     enabled_tools: z.array(z.string().min(1)).min(1),
+    skills: z
+      .object({
+        enabled: z.boolean().optional(),
+        path: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     system_prompt: z.string().min(1).optional(),
     system_prompt_file: z.string().min(1).optional(),
   })
@@ -187,6 +188,13 @@ const rawAgentSchema = z
       ctx.addIssue({
         code: "custom",
         message: "exactly one of `system_prompt` or `system_prompt_file` is required",
+      });
+    }
+    if (value.skills?.enabled === true && !value.skills.path) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["skills", "path"],
+        message: "`skills.path` is required when skills are enabled",
       });
     }
   });
@@ -227,10 +235,48 @@ const rawPromptSchema = z
     }
   });
 
+const rawScenarioStepSchema = z
+  .object({
+    id: z.string().min(1),
+    agent: z.string().min(1),
+    role: z.string().min(1).optional(),
+    prompt: z.string().min(1).optional(),
+    message: z.string().min(1),
+    skills: z.array(z.string().min(1)).optional(),
+    model: z.string().min(1).optional(),
+    effort: effortSchema.optional(),
+    timeout: timeSchema.optional(),
+    cwd: z.string().min(1).optional(),
+    compact: z.boolean().optional(),
+  })
+  .strict();
+
+const rawScenarioSchema = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().min(1).optional(),
+    steps: z.array(rawScenarioStepSchema).min(1),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, step] of value.steps.entries()) {
+      if (seen.has(step.id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["steps", index, "id"],
+          message: `duplicate scenario step id \`${step.id}\``,
+        });
+      }
+      seen.add(step.id);
+    }
+  });
+
 export type Definitions = {
   agents: Map<string, AgentDef>;
   roles: Map<string, RoleDef>;
   prompts: Map<string, PromptDef>;
+  scenarios: Map<string, ScenarioDef>;
 };
 
 export async function loadDefinitions(roots: ConfigRoots, catalog: ModelCatalog): Promise<Definitions> {
@@ -242,6 +288,10 @@ export async function loadDefinitions(roots: ConfigRoots, catalog: ModelCatalog)
         throw configError(`agent \`${parsed.name}\` enables unknown tool \`${toolId}\``);
       }
     }
+    const skillsEnabled = parsed.skills?.enabled ?? false;
+    const skillsPath =
+      skillsEnabled && parsed.skills?.path ? resolveDefinitionFilePath(file.path, parsed.skills.path) : null;
+    const skills = skillsEnabled && skillsPath ? await loadSkillsFromDirectory(skillsPath) : [];
     agents.set(parsed.name, {
       name: parsed.name,
       description: parsed.description ?? null,
@@ -251,6 +301,9 @@ export async function loadDefinitions(roots: ConfigRoots, catalog: ModelCatalog)
       compact_at_tokens: parsed.compact_at_tokens ?? 180000,
       run_timeout: parsed.run_timeout ?? null,
       enabled_tools: parsed.enabled_tools,
+      skills_enabled: skillsEnabled,
+      skills_path: skillsPath,
+      skills,
       system_prompt:
         parsed.system_prompt ?? (await readTextAsset(resolveDefinitionFilePath(file.path, parsed.system_prompt_file!))),
       source_path: file.path,
@@ -280,10 +333,60 @@ export async function loadDefinitions(roots: ConfigRoots, catalog: ModelCatalog)
     });
   }
 
+  const scenarios = new Map<string, ScenarioDef>();
+  for (const file of await listDefinitionFiles(roots, "scenarios")) {
+    const parsed = parseWithSchema(rawScenarioSchema, await parseTomlFile(file.path), file.path);
+    for (const step of parsed.steps) {
+      const agent = agents.get(step.agent);
+      if (!agent) {
+        throw configError(`scenario \`${parsed.name}\` references unknown agent \`${step.agent}\``);
+      }
+      if (step.role && !roles.has(step.role)) {
+        throw configError(`scenario \`${parsed.name}\` references unknown role \`${step.role}\``);
+      }
+      if (step.prompt && !prompts.has(step.prompt)) {
+        throw configError(`scenario \`${parsed.name}\` references unknown prompt \`${step.prompt}\``);
+      }
+      if (step.model) {
+        try {
+          resolveModelId(catalog, step.model);
+        } catch {
+          throw configError(`scenario \`${parsed.name}\` references unknown model \`${step.model}\``);
+        }
+      }
+      for (const skillId of step.skills ?? []) {
+        if (!agent.skills.find((skill) => skill.id === skillId)) {
+          throw configError(
+            `scenario \`${parsed.name}\` references unknown skill \`${skillId}\` for agent \`${agent.name}\``,
+          );
+        }
+      }
+    }
+    scenarios.set(parsed.name, {
+      name: parsed.name,
+      description: parsed.description ?? null,
+      steps: parsed.steps.map((step) => ({
+        id: step.id,
+        agent: step.agent,
+        role: step.role ?? null,
+        prompt: step.prompt ?? null,
+        message: step.message,
+        skills: step.skills ?? [],
+        model: step.model ?? null,
+        effort: step.effort ?? null,
+        timeoutSeconds: step.timeout ?? null,
+        cwd: step.cwd ? resolveDefinitionFilePath(file.path, step.cwd) : null,
+        compact: step.compact ?? null,
+      })),
+      source_path: file.path,
+    });
+  }
+
   return {
     agents,
     roles,
     prompts,
+    scenarios,
   };
 }
 

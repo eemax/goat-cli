@@ -9,8 +9,18 @@ import {
 } from "./types.js";
 import { parseTime } from "./units.js";
 
-const RUN_VALUE_FLAGS = new Set(["--agent", "--role", "--prompt", "--model", "--effort", "--timeout", "--cwd"]);
-const BOOL_FLAGS = new Set(["--fork", "--no-role", "--plan", "--verbose", "--debug", "--debug-json"]);
+const RUN_VALUE_FLAGS = new Set([
+  "--agent",
+  "--role",
+  "--prompt",
+  "--skill",
+  "--scenario",
+  "--model",
+  "--effort",
+  "--timeout",
+  "--cwd",
+]);
+const BOOL_FLAGS = new Set(["--fork", "--no-role", "--compact", "--plan", "--verbose", "--debug", "--debug-json"]);
 
 function defaultRunOptions(): RunOptions {
   return {
@@ -19,6 +29,9 @@ function defaultRunOptions(): RunOptions {
     role: null,
     noRole: false,
     prompt: null,
+    skills: [],
+    compact: false,
+    scenario: null,
     model: null,
     effort: null,
     timeoutSeconds: null,
@@ -67,6 +80,12 @@ function parseRun(commandName: RunCommand["name"], session: SessionSelector, arg
         case "--prompt":
           options.prompt = value;
           break;
+        case "--skill":
+          options.skills.push(value);
+          break;
+        case "--scenario":
+          options.scenario = value;
+          break;
         case "--model":
           options.model = value;
           break;
@@ -92,6 +111,9 @@ function parseRun(commandName: RunCommand["name"], session: SessionSelector, arg
           break;
         case "--no-role":
           options.noRole = true;
+          break;
+        case "--compact":
+          options.compact = true;
           break;
         case "--plan":
           options.plan = true;
@@ -135,6 +157,22 @@ function parseRun(commandName: RunCommand["name"], session: SessionSelector, arg
     throw usageError("--fork cannot be used with `goat new`");
   }
 
+  if (options.scenario) {
+    if (session !== "new") {
+      throw usageError("--scenario can only be used with `goat new` or `goat --session new`");
+    }
+    if (
+      options.agent ||
+      options.role ||
+      options.noRole ||
+      options.prompt ||
+      options.skills.length > 0 ||
+      options.fork
+    ) {
+      throw usageError("--scenario cannot be combined with --agent, --role, --no-role, --prompt, --skill, or --fork");
+    }
+  }
+
   if (positionals.length !== 1) {
     throw usageError("prompt runs require exactly one message argument");
   }
@@ -166,6 +204,10 @@ export function parseArgv(argv: string[]): Command {
       return { kind: "roles" };
     case "prompts":
       return { kind: "prompts" };
+    case "skills":
+      return { kind: "skills" };
+    case "scenarios":
+      return { kind: "scenarios" };
     case "new":
       return parseRun("new", "new", rest);
     case "last":
@@ -178,8 +220,27 @@ export function parseArgv(argv: string[]): Command {
       return parseSessions(rest);
     case "runs":
       return parseRuns(rest);
+    case "compact":
+      return parseCompact(rest);
     default:
       throw usageError(`unknown command ${first}`);
+  }
+}
+
+function parseCompact(argv: string[]): Command {
+  if (argv.length === 0) {
+    throw usageError("missing `compact` subcommand");
+  }
+
+  const [subcommand, ...rest] = argv;
+  switch (subcommand) {
+    case "session":
+      if (rest.length !== 1) {
+        throw usageError("`goat compact session` requires exactly one session selector");
+      }
+      return { kind: "compact.session", session: rest[0] };
+    default:
+      throw usageError(`unknown \`compact\` subcommand ${subcommand}`);
   }
 }
 

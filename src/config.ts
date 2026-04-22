@@ -41,6 +41,7 @@ const rawConfigSchema = z
       .object({
         max_stdin: bytesSchema.optional(),
         run_timeout: timeSchema.optional(),
+        stderr_message_max_chars: tokenSchema.optional(),
       })
       .strict()
       .optional(),
@@ -141,7 +142,7 @@ export async function exists(path: string): Promise<boolean> {
   }
 }
 
-function resolveConfigPath(baseDir: string, rawPath: string, repoRoot: string | null): string {
+function resolveConfigPath(baseDir: string, rawPath: string): string {
   if (rawPath === "~") {
     return normalize(homedir());
   }
@@ -152,14 +153,6 @@ function resolveConfigPath(baseDir: string, rawPath: string, repoRoot: string | 
 
   if (rawPath.startsWith("/")) {
     return normalize(rawPath);
-  }
-
-  if (rawPath === "." || rawPath.startsWith("./")) {
-    if (!repoRoot) {
-      throw configError(`config path \`${rawPath}\` requires a repo root, but no repo root was discovered`);
-    }
-
-    return rawPath === "." ? normalize(repoRoot) : normalize(resolve(repoRoot, rawPath.slice(2)));
   }
 
   return normalize(resolve(baseDir, rawPath));
@@ -174,33 +167,31 @@ export async function parseTomlFile(path: string): Promise<Record<string, unknow
   }
 }
 
-function resolveConfigLayer(layer: RawConfig, sourcePath: string, repoRoot: string | null): RawConfig {
+function resolveConfigLayer(layer: RawConfig, sourcePath: string): RawConfig {
   const baseDir = dirname(sourcePath);
   return {
     ...layer,
     paths: layer.paths
       ? {
           ...layer.paths,
-          sessions_dir: layer.paths.sessions_dir
-            ? resolveConfigPath(baseDir, layer.paths.sessions_dir, repoRoot)
-            : undefined,
+          sessions_dir: layer.paths.sessions_dir ? resolveConfigPath(baseDir, layer.paths.sessions_dir) : undefined,
         }
       : undefined,
     compaction: layer.compaction
       ? {
           ...layer.compaction,
           prompt_file: layer.compaction.prompt_file
-            ? resolveConfigPath(baseDir, layer.compaction.prompt_file, repoRoot)
+            ? resolveConfigPath(baseDir, layer.compaction.prompt_file)
             : undefined,
         }
       : undefined,
   };
 }
 
-function normalizeGlobalConfig(raw: RawConfig, homeRoot: string): GlobalConfig {
+function normalizeGlobalConfig(raw: RawConfig, defaultRoot: string): GlobalConfig {
   return {
     paths: {
-      sessions_dir: raw.paths?.sessions_dir ?? join(homeRoot, "sessions"),
+      sessions_dir: raw.paths?.sessions_dir ?? join(defaultRoot, "sessions"),
     },
     defaults: {
       agent: raw.defaults?.agent ?? null,
@@ -216,6 +207,7 @@ function normalizeGlobalConfig(raw: RawConfig, homeRoot: string): GlobalConfig {
     runtime: {
       max_stdin: raw.runtime?.max_stdin ?? 8 * 1024 * 1024,
       run_timeout: raw.runtime?.run_timeout ?? 7200,
+      stderr_message_max_chars: raw.runtime?.stderr_message_max_chars ?? 2000,
     },
     compaction: {
       model: raw.compaction?.model ?? null,
@@ -249,50 +241,34 @@ function normalizeGlobalConfig(raw: RawConfig, homeRoot: string): GlobalConfig {
   };
 }
 
+function envHomeDir(env: EnvLike): string {
+  return normalize(env.HOME ? resolve(env.HOME) : homedir());
+}
+
 export async function discoverRoots(processCwd: string, env: EnvLike = process.env): Promise<ConfigRoots> {
-  const overrideRepoRoot = env.GOAT_REPO_ROOT;
-  const overrideHomeRoot = env.GOAT_HOME_ROOT;
-  const homeRoot = normalize(overrideHomeRoot ? resolve(overrideHomeRoot) : join(homedir(), ".goat"));
-
-  if (overrideRepoRoot) {
-    return {
-      repoRoot: normalize(resolve(overrideRepoRoot)),
-      homeRoot,
-    };
+  const userHome = envHomeDir(env);
+  const configRoots = [join(userHome, "goat-cli"), join(userHome, ".config", "goat")];
+  if (env.GOAT_HOME_DIR) {
+    configRoots.push(resolve(processCwd, env.GOAT_HOME_DIR));
   }
 
-  let current = normalize(resolve(processCwd));
-  while (true) {
-    if ((await exists(join(current, "goat.toml"))) || (await exists(join(current, ".goat")))) {
-      return {
-        repoRoot: current,
-        homeRoot,
-      };
-    }
-    const parent = dirname(current);
-    if (parent === current) {
-      return {
-        repoRoot: null,
-        homeRoot,
-      };
-    }
-    current = parent;
-  }
+  const normalizedRoots = configRoots.map((root) => normalize(root));
+  return {
+    configRoots: normalizedRoots,
+    homeRoot: normalizedRoots[normalizedRoots.length - 1]!,
+  };
 }
 
 export async function loadGlobalConfig(roots: ConfigRoots): Promise<GlobalConfig> {
   const layers: RawConfig[] = [];
 
-  for (const root of [roots.homeRoot, roots.repoRoot]) {
-    if (!root) {
-      continue;
-    }
+  for (const root of roots.configRoots) {
     const path = join(root, "goat.toml");
     if (!(await exists(path))) {
       continue;
     }
     const parsed = parseWithSchema(rawConfigSchema, await parseTomlFile(path), path);
-    layers.push(resolveConfigLayer(parsed, path, roots.repoRoot));
+    layers.push(resolveConfigLayer(parsed, path));
   }
 
   const merged = layers.reduce<RawConfig>((accumulator, layer) => deepMerge(accumulator, layer) as RawConfig, {});

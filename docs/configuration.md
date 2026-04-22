@@ -2,23 +2,21 @@
 
 ## Resolution model
 
-Goat resolves configuration from exactly two roots:
-
-1. **Repo root** -- nearest ancestor of the working directory containing `goat.toml` or `.goat`
-2. **Home root** -- `~/.goat/`
+Goat resolves configuration from an ordered global root stack:
 
 The effective config is built in this order (later overrides earlier):
 
-1. Home root
-2. Repo root
-3. Environment variable fallbacks
-4. Explicit CLI flags
+1. `~/goat-cli/`
+2. `~/.config/goat/`
+3. `$GOAT_HOME_DIR`, when set
+4. Environment variable fallbacks
+5. Explicit CLI flags
 
-`--cwd` affects tool execution only. It does not affect root discovery or definition resolution.
+`GOAT_HOME_ROOT`, `GOAT_REPO_ROOT`, `~/.goat/`, cwd markers, and repo-local discovery are ignored. `--cwd` affects tool execution only. It does not affect definition resolution.
 
 ## Directory structure
 
-### Repo root
+### Config root
 
 ```
 goat.toml           Global config
@@ -26,29 +24,18 @@ models.toml         Model catalog
 agents/             Agent definitions
 roles/              Role definitions
 prompts/            Prompt definitions
-skills/             Reserved for future use
-```
-
-### Home root
-
-```
-~/.goat/
-  goat.toml         Global config
-  models.toml       Model catalog
-  agents/           Agent definitions
-  roles/            Role definitions
-  prompts/          Prompt definitions
-  skills/           Reserved
-  sessions/         Session storage (default location)
+skills/             Skill folders containing SKILL.md
+scenarios/          Scenario definitions
+sessions/           Session storage (default: highest-priority root only)
 ```
 
 ## Merge semantics
 
-**Global config** (`goat.toml`): deep-merge by section. Scalars: repo overrides home. Arrays: repo replaces home. Objects: merge recursively. Unknown keys fail validation.
+**Global config** (`goat.toml`): deep-merge by section. Scalars: higher-priority roots override lower-priority roots. Arrays: higher-priority roots replace lower-priority roots. Objects: merge recursively. Unknown keys fail validation.
 
-**Definitions** (agents, roles, prompts): repo definitions shadow home definitions with the same name. List commands show the resolved set without duplicates.
+**Definitions** (agents, roles, prompts, scenarios): higher-priority roots shadow lower-priority definitions with the same filename. List commands show the resolved set without duplicates.
 
-**Model catalog** (`models.toml`): merge by canonical `id`. Repo entries override home entries for the same ID. Alias collisions across layers are resolved in favor of repo. Collisions within the same layer are validation errors.
+**Model catalog** (`models.toml`): merge by canonical `id`. Higher-priority entries override lower-priority entries for the same ID. Alias collisions across layers are resolved in favor of higher-priority roots. Collisions within the same layer are validation errors.
 
 ## goat.toml reference
 
@@ -56,9 +43,9 @@ skills/             Reserved for future use
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `sessions_dir` | string | `~/.goat/sessions/` | Root directory for session storage |
+| `sessions_dir` | string | `<highest-priority-root>/sessions/` | Root directory for session storage |
 
-Path resolution: `~` resolves from home. `.` resolves from repo root. Relative paths resolve from the containing `goat.toml`.
+Path resolution: `~` resolves from the OS home directory. `.` and relative paths resolve from the containing `goat.toml`.
 
 ### `[defaults]`
 
@@ -85,6 +72,7 @@ Credential precedence: `api_key` > env var named by `api_key_env` > `OPENAI_API_
 |-----|------|---------|-------------|
 | `max_stdin` | size | `8mb` | Hard upper bound on stdin payload. Exceeding this fails with exit code 2 (`USAGE_ERROR`). |
 | `run_timeout` | duration | `2h` | Total wall-clock run timeout. Applies to the whole prompt run (provider turns + tool execution). |
+| `stderr_message_max_chars` | tokens | `2k` | Per-event cap for numbered verbose/debug stderr messages. Truncation uses `…[+X chars]`. |
 
 **Timeout precedence**. The effective run timeout is resolved in order:
 
@@ -187,6 +175,10 @@ enabled_tools = [
   "glob", "grep",
 ]
 system_prompt_file = "./coder.md"
+
+[skills]
+enabled = true
+path = "../skills"
 ```
 
 | Field | Type | Required | Description |
@@ -200,8 +192,10 @@ system_prompt_file = "./coder.md"
 | `max_output_tokens` | tokens | no | Output token cap (default: 12k) |
 | `compact_at_tokens` | tokens | no | Compaction budget (default: 180k) |
 | `run_timeout` | duration | no | Inherits from `runtime.run_timeout` |
+| `[skills].enabled` | bool | no | Enables skills for this agent. Missing means disabled. |
+| `[skills].path` | string | when enabled | Folder containing skill subfolders with `SKILL.md`. Resolves relative to the agent file. |
 
-`system_prompt_file` resolves relative to the agent file. Unknown `enabled_tools` entries fail validation.
+`system_prompt_file` resolves relative to the agent file. Unknown `enabled_tools` entries fail validation. Enabled skills scan immediate child folders; each `SKILL.md` must include frontmatter with `name` and `description`.
 
 ## Role files
 
@@ -238,6 +232,44 @@ text_file = "./repo-summary.md"
 | `description` | string | no | Description |
 
 Prompts are one-turn user-message prefixes. They are never sticky.
+
+## Skill files
+
+Location: `<agent skills path>/<skill-folder>/SKILL.md`.
+
+```markdown
+---
+name: Research
+description: Find facts and summarize them
+---
+
+# Research
+
+Use this workflow for research-heavy turns.
+```
+
+Skill ids come from folder names normalized to lowercase with non-alphanumeric characters replaced by `_`. Skills are listed in the system instructions for the selected agent and are injected for one turn only when requested with `--skill <id>`.
+
+## Scenario files
+
+Location: `<root>/scenarios/<name>.toml`.
+
+```toml
+name = "review-chain"
+description = "Inspect, then review"
+
+[[steps]]
+id = "inspect"
+agent = "coder"
+message = "{{input}}"
+
+[[steps]]
+id = "review"
+agent = "auditor"
+message = "Review this output:\n\n{{previous_output}}"
+```
+
+Scenario steps run sequentially, each in a fresh session. Supported template variables are `{{input}}`, `{{previous_output}}`, `{{steps.<id>.output}}`, `{{steps.<id>.session_id}}`, and `{{steps.<id>.run_id}}`.
 
 ## Runtime precedence
 

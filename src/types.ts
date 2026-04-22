@@ -46,6 +46,9 @@ export type RunOptions = {
   role: string | null;
   noRole: boolean;
   prompt: string | null;
+  skills: string[];
+  compact: boolean;
+  scenario: string | null;
   model: string | null;
   effort: Effort | null;
   timeoutSeconds: number | null;
@@ -70,6 +73,9 @@ export type Command =
   | { kind: "agents" }
   | { kind: "roles" }
   | { kind: "prompts" }
+  | { kind: "skills" }
+  | { kind: "scenarios" }
+  | { kind: "compact.session"; session: SessionSelector }
   | { kind: "sessions.new" }
   | { kind: "sessions.last" }
   | { kind: "sessions.list" }
@@ -290,7 +296,7 @@ export type DoctorCheck = {
 };
 
 export type ConfigRoots = {
-  repoRoot: string | null;
+  configRoots: string[];
   homeRoot: string;
 };
 
@@ -312,6 +318,7 @@ export type GlobalConfig = {
   runtime: {
     max_stdin: number;
     run_timeout: number;
+    stderr_message_max_chars: number;
   };
   compaction: {
     model: string | null;
@@ -344,6 +351,14 @@ export type GlobalConfig = {
   };
 };
 
+export type SkillDef = {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  content: string;
+};
+
 export type ModelDef = {
   id: string;
   provider_model: string;
@@ -362,6 +377,9 @@ export type AgentDef = {
   compact_at_tokens: number;
   run_timeout: number | null;
   enabled_tools: string[];
+  skills_enabled: boolean;
+  skills_path: string | null;
+  skills: SkillDef[];
   system_prompt: string;
   source_path: string;
 };
@@ -377,5 +395,26 @@ export type PromptDef = {
   name: string;
   description: string | null;
   text: string;
+  source_path: string;
+};
+
+export type ScenarioStepDef = {
+  id: string;
+  agent: string;
+  role: string | null;
+  prompt: string | null;
+  message: string;
+  skills: string[];
+  model: string | null;
+  effort: Effort | null;
+  timeoutSeconds: number | null;
+  cwd: string | null;
+  compact: boolean | null;
+};
+
+export type ScenarioDef = {
+  name: string;
+  description: string | null;
+  steps: ScenarioStepDef[];
   source_path: string;
 };

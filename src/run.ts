@@ -1,12 +1,12 @@
 import type { Readable, Writable } from "node:stream";
+import type { AgentInputItem } from "@openai/agents";
 import { AgentLoopError, runAgentLoop } from "./agent.js";
+import { runAgentsSdkLoop } from "./agents-sdk.js";
 import { ArtifactStore } from "./artifacts.js";
 import { createDebugSink, type DebugSink, debugErrorData } from "./debug.js";
 import { ExitCode, GoatError, sessionConflictError, timeoutError } from "./errors.js";
 import { exportProviderTools, type ToolContext } from "./harness.js";
-import { formatError, writeText } from "./io.js";
-import type { ProviderClient } from "./provider.js";
-import { OpenAIResponsesProvider } from "./provider.js";
+import { formatError } from "./io.js";
 import {
   appendJsonlRecord,
   buildReplayRecords,
@@ -38,10 +38,26 @@ import { nowIso } from "./utils.js";
 type RunCommand = Extract<Command, { kind: "run" }>;
 type LockState = { executionLock: LockHandle | null };
 
-function createProviderFactory(
-  deps?: RuntimeDeps,
-): (config: { apiKey: string; baseURL: string; timeoutSeconds: number }) => ProviderClient {
-  return deps?.createProvider ?? ((config) => new OpenAIResponsesProvider(config));
+function toAgentsSdkInputItem(message: { role: "user" | "assistant"; content: string }): AgentInputItem {
+  if (message.role === "assistant") {
+    return {
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [
+        {
+          type: "output_text",
+          text: message.content,
+        },
+      ],
+    };
+  }
+
+  return {
+    type: "message",
+    role: "user",
+    content: message.content,
+  };
 }
 
 /**
@@ -101,7 +117,7 @@ async function writeInitialTranscript(params: {
   command: RunCommand;
 }): Promise<void> {
   const { runDir, runId, prepared, command } = params;
-  const { sessionMeta, agent, role, modelId, effort, effectiveCwd, prompt, stdinText } = prepared;
+  const { sessionMeta, agent, role, modelId, effort, effectiveCwd, promptAssembly, stdinText } = prepared;
 
   const runStartedRecord: TranscriptRecord = {
     v: 1,
@@ -124,7 +140,7 @@ async function writeInitialTranscript(params: {
     kind: "message",
     run_id: runId,
     role: "user",
-    content: prompt ? `${prompt.text}\n\n${command.message}` : command.message,
+    content: promptAssembly.current_user_content,
   });
   if (stdinText !== null) {
     await appendJsonlRecord(runDir.transcript, {
@@ -184,7 +200,6 @@ export async function executeRunCommand(
   stderr: Writable,
   deps?: RuntimeDeps,
 ): Promise<CommandOutput> {
-  const providerFactory = createProviderFactory(deps);
   const debug = createDebugSink(stderr, command.options);
   let prepared: PreparedRun;
   try {
@@ -258,38 +273,48 @@ export async function executeRunCommand(
       provider_model: providerModel,
       cwd: effectiveCwd,
     });
-    const provider = providerFactory({
-      apiKey,
-      baseURL: context.config.provider.base_url,
-      timeoutSeconds: context.config.provider.timeout,
-    });
-    const loopResult = await runAgentLoop({
-      runId,
-      provider,
-      model: providerModel,
-      instructions: promptAssembly.instructions,
-      initialInput: promptAssembly.input.map((message) => ({
-        type: "message",
-        role: message.role,
-        content: message.content,
-      })),
-      tools: exportProviderTools(agent.enabled_tools),
-      enabledTools: agent.enabled_tools,
-      effort,
-      maxOutputTokens: agent.max_output_tokens,
-      contextWindowTokens: modelContextWindow,
-      toolContext,
-      debug,
-      onTextDelta: command.options.verbose
-        ? async (delta) => {
-            await writeText(stderr, delta);
-          }
-        : undefined,
-    });
+    const providerInput = promptAssembly.input.map((message) => ({
+      type: "message" as const,
+      role: message.role,
+      content: message.content,
+    }));
+    const agentsSdkInput = promptAssembly.input.map(toAgentsSdkInputItem);
+    const loopResult = deps?.createProvider
+      ? await runAgentLoop({
+          runId,
+          provider: deps.createProvider({
+            apiKey,
+            baseURL: context.config.provider.base_url,
+            timeoutSeconds: context.config.provider.timeout,
+          }),
+          model: providerModel,
+          instructions: promptAssembly.instructions,
+          initialInput: providerInput,
+          tools: exportProviderTools(agent.enabled_tools),
+          enabledTools: agent.enabled_tools,
+          effort,
+          maxOutputTokens: agent.max_output_tokens,
+          contextWindowTokens: modelContextWindow,
+          toolContext,
+          debug,
+        })
+      : await runAgentsSdkLoop({
+          runId,
+          config: {
+            apiKey,
+            baseURL: context.config.provider.base_url,
+            timeoutSeconds: context.config.provider.timeout,
+          },
+          model: providerModel,
+          instructions: promptAssembly.instructions,
+          initialInput: agentsSdkInput,
+          enabledTools: agent.enabled_tools,
+          effort,
+          maxOutputTokens: agent.max_output_tokens,
+          toolContext,
+          debug,
+        });
 
-    if (command.options.verbose && loopResult.final_text) {
-      await writeText(stderr, "\n");
-    }
     observedUsage = loopResult.usage;
 
     await persistProviderRecords(runDir.provider, runId, loopResult.provider_turns, providerModel);
@@ -330,6 +355,10 @@ export async function executeRunCommand(
       stdout: `${loopResult.final_text}\n`,
       stderr: "",
       exitCode: ExitCode.success,
+      meta: {
+        session_id: sessionMeta.session_id,
+        run_id: runId,
+      },
     };
   } catch (error) {
     const rootError = unwrapRunError(error);

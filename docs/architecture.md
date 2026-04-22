@@ -8,7 +8,7 @@ V1 is intentionally narrow:
 
 - One process, one CLI entrypoint
 - One session store (local filesystem)
-- One provider (OpenAI Responses API over HTTP)
+- One OpenAI runtime (Agents SDK on top of the Responses API)
 - One tool harness
 - One strict stdout/stderr contract
 
@@ -21,7 +21,7 @@ The goal is a boring, reliable core with strong boundaries and durable on-disk s
 - **Modular** -- providers, tools, and higher-level products layer on top of stable interfaces.
 - **Scriptable** -- stdout is machine-safe for the final reply; stderr carries progress and diagnostics.
 - **Auditable** -- every run leaves behind enough artifacts to explain what happened.
-- **Extensible** -- future features (skills, web tooling, subagents) fit without warping the core model.
+- **Extensible** -- skills, scenarios, future web tooling, and subagents fit without warping the core model.
 
 ## Implementation
 
@@ -32,21 +32,21 @@ Goat is implemented in TypeScript running on [Bun](https://bun.sh). Bun serves a
 For a prompt run:
 
 1. Parse CLI arguments
-2. Resolve configuration roots (repo + home)
+2. Resolve the ordered global configuration root stack
 3. Load global config, model catalog, and definitions
 4. Create or resolve the target session
-5. Resolve agent, role, one-turn prompt, and working directory
+5. Resolve agent, role, one-turn prompt, skill invocations, and working directory
 6. Validate the effective working directory
 7. Read stdin if present, enforcing size and UTF-8 rules
 8. Assemble the provider input from system layers and replayable session history
-9. If a conservative pre-send estimate exceeds `compact_at_tokens`, compact first
+9. If `--compact` is set or a conservative pre-send estimate exceeds `compact_at_tokens`, compact first
 10. Create the run directory
 11. Execute the assistant/tool loop, compacting at safe points when needed
 12. Persist run transcript, provider metadata, and summary
 13. Project replayable records back into session history
 14. Print the final assistant text to stdout
 
-Non-run commands (version, doctor, sessions, runs, agents, roles, prompts) stop earlier and never enter the provider loop.
+Scenario runs expand into sequential prompt runs in fresh sessions. Non-provider commands (version, doctor, sessions, runs, compact, agents, roles, prompts, skills, scenarios) stop earlier and never enter the assistant/tool loop.
 
 ## Responses API ownership
 
@@ -54,7 +54,7 @@ Goat uses a hybrid ownership model for the OpenAI Responses API.
 
 **Across runs**: fully stateful on the local filesystem. Each new run rebuilds its provider input from agent prompt, role overlay, compaction summary, replay history, and the current user message. No dependency on provider-side stored conversation state.
 
-**Within a run**: uses `previous_response_id` to continue the Responses API loop across tool turns. This gives cheaper tool-turn requests, warmer server-side reasoning state, and better cache locality.
+**Within a run**: the default runtime uses the OpenAI Agents SDK, which owns the model/tool loop and continues Responses API turns under the hood. Goat still records provider turns, transcripts, usage, local tool envelopes, and session commits. The lower-level `ProviderClient` loop remains available for tests and compatibility seams.
 
 If compaction rebuilds the working set mid-run, the continuation handle is dropped and the loop resumes from the rebuilt checkpoint.
 
@@ -65,13 +65,16 @@ If compaction rebuilds the working set mid-run, the continuation handle is dropp
 | `src/cli.ts` | Argument parsing, command shape validation |
 | `src/app.ts` | Command dispatch, session/prompt orchestration, stdout/stderr routing |
 | `src/config.ts` | Root discovery, config loading, schema validation |
-| `src/defs.ts` | Model/agent/role/prompt definition loading |
+| `src/defs.ts` | Model/agent/role/prompt/scenario definition loading |
 | `src/session.ts` | Session lifecycle: create, resolve, list, show, stop, fork, locking |
 | `src/prompt.ts` | Prompt stack assembly, pre-send token estimation |
-| `src/provider.ts` | Provider adapter, transport, request/response handling, usage normalization |
-| `src/agent.ts` | Provider/tool loop, tool-call sequencing, streaming, plan-mode |
+| `src/agents-sdk.ts` | Agents SDK runtime adapter, result mapping, usage normalization |
+| `src/provider.ts` | Legacy Responses provider adapter for injected tests and low-level compatibility |
+| `src/agent.ts` | Legacy provider/tool loop used with injected `ProviderClient` implementations |
 | `src/harness.ts` | Tool registry, argument validation, limits, output envelope normalization |
 | `src/tools-*.ts` | Individual tool implementations |
+| `src/skills.ts` | Skill loading, listing, and one-turn invocation rendering |
+| `src/scenarios.ts` | Scenario chain execution and template expansion |
 | `src/artifacts.ts` | Inline vs file-backed payloads, artifact path management |
 | `src/compaction.ts` | Conversation history compaction |
 | `src/run.ts` | Run command execution orchestration |
@@ -86,10 +89,12 @@ If compaction rebuilds the working set mid-run, the continuation handle is dropp
 - Created/resolved session IDs (for session commands)
 - Explicit list/show command output
 
-**Stderr** contains everything else:
-- Streaming deltas, verbose logs, tool progress
-- Debug information, session creation notices
-- Validation failures, provider and tool errors
+**Stderr** contains:
+- Validation failures, provider errors, and tool errors
+- Numbered progress events when `--verbose` is set
+- Numbered diagnostic events when `--debug` or `--debug-json` is set
+
+Assistant text deltas and final replies are not streamed to stderr. Successful prompt runs without verbose/debug flags normally write no stderr.
 
 This split is a hard contract.
 

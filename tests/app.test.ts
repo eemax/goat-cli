@@ -50,9 +50,13 @@ async function createRepoFixture(options?: { modelsToml?: string; agentToml?: st
   await mkdir(join(repoRoot, "agents"), { recursive: true });
   await mkdir(join(repoRoot, "roles"), { recursive: true });
   await mkdir(join(repoRoot, "prompts"), { recursive: true });
+  await mkdir(join(repoRoot, "scenarios"), { recursive: true });
   await writeFile(
     join(repoRoot, "goat.toml"),
     `
+[paths]
+sessions_dir = "${join(homeRoot, "sessions")}"
+
 [defaults]
 agent = "coder"
 `,
@@ -84,7 +88,7 @@ async function runCli(
   argv: string[],
   provider: ProviderClient,
   repoRoot: string,
-  homeRoot: string,
+  _homeRoot: string,
   stdinText = "",
 ): Promise<{
   stdout: string;
@@ -98,7 +102,7 @@ async function runCli(
     processCwd: repoRoot,
     env: {
       ...process.env,
-      GOAT_HOME_ROOT: homeRoot,
+      GOAT_HOME_DIR: repoRoot,
       OPENAI_API_KEY: "test-key",
     },
     createProvider: () => provider,
@@ -147,6 +151,7 @@ describe("app integration", () => {
 
     const first = await runCli(["new", "inspect the repo"], provider, repoRoot, homeRoot);
     expect(first.stdout).toBe("first answer\n");
+    expect(first.stderr).toBe("");
     expect(first.exitCode).toBe(0);
 
     const sessionsDir = join(homeRoot, "sessions");
@@ -169,6 +174,210 @@ describe("app integration", () => {
       await readFile(join(sessionsDir, sessionId, "runs", runIds[0]!, "summary.json"), "utf8"),
     );
     expect(summary.status).toBe("completed");
+  });
+
+  test("lists agent skills and injects selected skills into the current user turn", async () => {
+    const { repoRoot, homeRoot } = await createRepoFixture({
+      agentToml: `
+name = "coder"
+default_model = "mini"
+enabled_tools = ["read_file"]
+system_prompt = "You are the coding agent."
+
+[skills]
+enabled = true
+path = "../skills"
+`,
+    });
+    await mkdir(join(repoRoot, "skills", "research"), { recursive: true });
+    await writeFile(
+      join(repoRoot, "skills", "research", "SKILL.md"),
+      "---\nname: Research\ndescription: Research helper\n---\n\n# Research\n",
+    );
+
+    const list = await runCli(["skills"], new FakeProvider([]), repoRoot, homeRoot);
+    expect(list.stdout).toContain("coder:");
+    expect(list.stdout).toContain("research\tResearch");
+
+    const provider = new FakeProvider([
+      {
+        response_id: "resp-skill",
+        previous_response_id: null,
+        status: "completed",
+        output_text: "skill answer",
+        tool_calls: [],
+        usage: null,
+        raw_response: {} as any,
+      },
+    ]);
+    const result = await runCli(["new", "--skill", "research", "inspect"], provider, repoRoot, homeRoot);
+
+    expect(result.stdout).toBe("skill answer\n");
+    expect(provider.requests[0]?.instructions).toContain("<available_skills>");
+    expect(provider.requests[0]?.instructions).toContain("Research helper");
+    const userMessage = provider.requests[0]?.input[0];
+    expect(userMessage).toMatchObject({ role: "user" });
+    expect(JSON.stringify(userMessage)).toContain("One-shot skill invocation: /research");
+    expect(JSON.stringify(userMessage)).toContain("# Research");
+    expect(JSON.stringify(userMessage)).toContain("inspect");
+  });
+
+  test("runs scenario steps in separate sessions and feeds prior output forward", async () => {
+    const { repoRoot, homeRoot } = await createRepoFixture({
+      modelsToml: `
+[[models]]
+id = "gpt-5.4-mini"
+aliases = ["mini"]
+
+[[models]]
+id = "gpt-5.4"
+aliases = ["big"]
+`,
+    });
+    await writeFile(
+      join(repoRoot, "agents", "reviewer.toml"),
+      `
+name = "reviewer"
+default_model = "mini"
+enabled_tools = ["read_file"]
+system_prompt = "You are the reviewer."
+`,
+    );
+    await writeFile(
+      join(repoRoot, "scenarios", "review-chain.toml"),
+      `
+name = "review-chain"
+
+[[steps]]
+id = "inspect"
+agent = "coder"
+message = "{{input}}"
+
+[[steps]]
+id = "review"
+agent = "reviewer"
+message = "Review this output:\\n\\n{{previous_output}}"
+`,
+    );
+    const provider = new FakeProvider([
+      {
+        response_id: "resp-scenario-1",
+        previous_response_id: null,
+        status: "completed",
+        output_text: "first output",
+        tool_calls: [],
+        usage: null,
+        raw_response: {} as any,
+      },
+      {
+        response_id: "resp-scenario-2",
+        previous_response_id: null,
+        status: "completed",
+        output_text: "final output",
+        tool_calls: [],
+        usage: null,
+        raw_response: {} as any,
+      },
+    ]);
+
+    const result = await runCli(
+      ["new", "--scenario", "review-chain", "--model", "big", "--effort", "low", "inspect"],
+      provider,
+      repoRoot,
+      homeRoot,
+    );
+
+    expect(result.stdout).toBe("final output\n");
+    const sessions = await readdir(join(homeRoot, "sessions"));
+    expect(sessions).toHaveLength(2);
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests.map((request) => request.model)).toEqual(["gpt-5.4", "gpt-5.4"]);
+    expect(provider.requests.map((request) => request.effort)).toEqual(["low", "low"]);
+    expect(JSON.stringify(provider.requests[1]?.input)).toContain("Review this output");
+    expect(JSON.stringify(provider.requests[1]?.input)).toContain("first output");
+  });
+
+  test("rejects scenario model typos before creating sessions", async () => {
+    const { repoRoot, homeRoot } = await createRepoFixture();
+    await writeFile(
+      join(repoRoot, "scenarios", "broken-model.toml"),
+      `
+name = "broken-model"
+
+[[steps]]
+id = "inspect"
+agent = "coder"
+model = "missing-model"
+message = "{{input}}"
+`,
+    );
+
+    const provider = new FakeProvider([]);
+    const result = await runCli(["new", "--scenario", "broken-model", "inspect"], provider, repoRoot, homeRoot);
+
+    expect(result.exitCode).toBe(ExitCode.config);
+    expect(result.stderr).toContain("scenario `broken-model` references unknown model `missing-model`");
+    expect(provider.requests).toHaveLength(0);
+    expect(await readdir(join(homeRoot, "sessions"))).toEqual([]);
+  });
+
+  test("caps numbered verbose stderr events without streaming assistant text", async () => {
+    const { repoRoot, homeRoot } = await createRepoFixture({
+      agentToml: `
+name = "coder"
+default_model = "mini"
+enabled_tools = ["bash"]
+system_prompt = "You are the coding agent."
+`,
+    });
+    await writeFile(
+      join(repoRoot, "goat.toml"),
+      `
+[paths]
+sessions_dir = "${join(homeRoot, "sessions")}"
+
+[defaults]
+agent = "coder"
+
+[runtime]
+stderr_message_max_chars = "80"
+`,
+    );
+    const longCommand = `printf '%s' '${"x".repeat(1000)}'`;
+    const provider = new FakeProvider([
+      {
+        response_id: "resp-verbose-1",
+        previous_response_id: null,
+        status: "completed",
+        output_text: "assistant text delta should stay off stderr",
+        tool_calls: [
+          {
+            call_id: "call-bash",
+            name: "bash",
+            arguments: JSON.stringify({ command: longCommand }),
+          },
+        ],
+        usage: null,
+        raw_response: {} as any,
+      },
+      {
+        response_id: "resp-verbose-2",
+        previous_response_id: "resp-verbose-1",
+        status: "completed",
+        output_text: "done",
+        tool_calls: [],
+        usage: null,
+        raw_response: {} as any,
+      },
+    ]);
+
+    const result = await runCli(["new", "--verbose", "inspect"], provider, repoRoot, homeRoot);
+
+    expect(result.stdout).toBe("done\n");
+    expect(result.stderr).toContain("[1] [System]");
+    expect(result.stderr).toContain("[Tool Call] [Bash]");
+    expect(result.stderr).toContain("…[+");
+    expect(result.stderr).not.toContain("assistant text delta should stay off stderr");
   });
 
   test("plan mode simulates mutating tools instead of editing the workspace", async () => {
@@ -277,10 +486,10 @@ system_prompt = "You are the coding agent."
     const result = await runCli(["new", "--debug", "inspect the repo"], provider, repoRoot, homeRoot);
     expect(result.stdout).toBe("Workspace inspected.\n");
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain("[debug][session]");
-    expect(result.stderr).toContain("[debug][context]");
-    expect(result.stderr).toContain("[debug][provider]");
-    expect(result.stderr).toContain("[debug][tool]");
+    expect(result.stderr).toContain("[System] [session:resolved]");
+    expect(result.stderr).toContain("[System] [context:assembled]");
+    expect(result.stderr).toContain("[System] [provider:request]");
+    expect(result.stderr).toContain("[Tool Call] [Bash]");
     expect(result.stderr).toContain("request_index=1");
     expect(result.stderr).toContain("tool_name=bash");
     expect(result.stderr).toContain("command=pwd");
@@ -345,24 +554,25 @@ system_prompt = "You are the coding agent."
       .map(
         (line) =>
           JSON.parse(line) as {
-            category: string;
-            event: string;
+            kind: string;
+            label: string;
+            message: string;
             data: Record<string, unknown>;
           },
       );
 
-    expect(events.some((event) => event.category === "session" && event.event === "resolved")).toBe(true);
-    expect(events.some((event) => event.category === "provider" && event.event === "request")).toBe(true);
-    expect(events.some((event) => event.category === "tool" && event.event === "finish")).toBe(true);
-    expect(events.some((event) => event.category === "run" && event.event === "finished")).toBe(true);
+    expect(events.some((event) => event.label === "session:resolved")).toBe(true);
+    expect(events.some((event) => event.label === "provider:request")).toBe(true);
+    expect(events.some((event) => event.kind === "Tool Result" && event.label === "Bash")).toBe(true);
+    expect(events.some((event) => event.label === "run:finished")).toBe(true);
 
-    const requestEvent = events.find((event) => event.category === "provider" && event.event === "request");
+    const requestEvent = events.find((event) => event.label === "provider:request");
     expect(requestEvent?.data.payload).toMatchObject({
       model: "gpt-5.4-mini",
       previous_response_id: null,
     });
 
-    const toolEvent = events.find((event) => event.category === "tool" && event.event === "finish");
+    const toolEvent = events.find((event) => event.kind === "Tool Result" && event.label === "Bash");
     expect(toolEvent?.data).toMatchObject({
       tool_name: "bash",
       exit_code: 0,
@@ -723,12 +933,161 @@ system_prompt = "${"A".repeat(260)}"
     expect(result.stderr).toContain("compact_at_tokens");
     expect(provider.requests).toHaveLength(0);
   });
+
+  test("runs manual session compaction as a persisted compaction run", async () => {
+    const { repoRoot, homeRoot } = await createRepoFixture({
+      agentToml: `
+name = "coder"
+default_model = "mini"
+compact_at_tokens = "1000"
+enabled_tools = ["read_file"]
+system_prompt = "You are the coding agent."
+`,
+    });
+    const sessionsDir = join(homeRoot, "sessions");
+    const session = await createSession(sessionsDir);
+    const history: MessageRecord[] = [
+      {
+        v: 1,
+        ts: new Date().toISOString(),
+        kind: "message",
+        run_id: "old-1",
+        role: "user",
+        source: "cli_arg",
+        content: "A".repeat(1000),
+      },
+      {
+        v: 1,
+        ts: new Date().toISOString(),
+        kind: "message",
+        run_id: "old-1",
+        role: "assistant",
+        source: "assistant_final",
+        content: "B".repeat(1000),
+      },
+      {
+        v: 1,
+        ts: new Date().toISOString(),
+        kind: "message",
+        run_id: "old-2",
+        role: "user",
+        source: "cli_arg",
+        content: "short",
+      },
+    ];
+    await appendMessages(sessionsDir, session.session_id, history);
+    const meta = await loadSessionMeta(sessionsDir, session.session_id);
+    await writeSessionMeta(sessionsDir, {
+      ...meta,
+      bound: true,
+      revision: 1,
+      message_count: history.length,
+      agent_name: "coder",
+      model: "gpt-5.4-mini",
+    });
+
+    const result = await runCli(["compact", "session", session.session_id], new FakeProvider([]), repoRoot, homeRoot);
+
+    expect(result.exitCode).toBe(0);
+    const runId = result.stdout.trim();
+    expect(runId.length).toBeGreaterThan(0);
+    const compacted = (await readFile(join(sessionsDir, session.session_id, "messages.jsonl"), "utf8"))
+      .split("\n")
+      .filter(Boolean);
+    expect(compacted.length).toBeLessThan(history.length);
+    const summary = JSON.parse(
+      await readFile(join(sessionsDir, session.session_id, "runs", runId, "summary.json"), "utf8"),
+    );
+    expect(summary.run_kind).toBe("compaction");
+    expect(summary.status).toBe("completed");
+  });
+
+  test("runs --compact before the prompt run starts", async () => {
+    const { repoRoot, homeRoot } = await createRepoFixture({
+      agentToml: `
+name = "coder"
+default_model = "mini"
+compact_at_tokens = "1000"
+enabled_tools = ["read_file"]
+system_prompt = "You are the coding agent."
+`,
+    });
+    const sessionsDir = join(homeRoot, "sessions");
+    const session = await createSession(sessionsDir);
+    const history: MessageRecord[] = [
+      {
+        v: 1,
+        ts: new Date().toISOString(),
+        kind: "message",
+        run_id: "old-1",
+        role: "user",
+        source: "cli_arg",
+        content: "A".repeat(1000),
+      },
+      {
+        v: 1,
+        ts: new Date().toISOString(),
+        kind: "message",
+        run_id: "old-1",
+        role: "assistant",
+        source: "assistant_final",
+        content: "B".repeat(1000),
+      },
+      {
+        v: 1,
+        ts: new Date().toISOString(),
+        kind: "message",
+        run_id: "old-2",
+        role: "user",
+        source: "cli_arg",
+        content: "short",
+      },
+    ];
+    await appendMessages(sessionsDir, session.session_id, history);
+    const meta = await loadSessionMeta(sessionsDir, session.session_id);
+    await writeSessionMeta(sessionsDir, {
+      ...meta,
+      bound: true,
+      revision: 1,
+      message_count: history.length,
+      agent_name: "coder",
+      model: "gpt-5.4-mini",
+    });
+    const provider = new FakeProvider([
+      {
+        response_id: "resp-compact-flag",
+        previous_response_id: null,
+        status: "completed",
+        output_text: "after compact",
+        tool_calls: [],
+        usage: null,
+        raw_response: {} as any,
+      },
+    ]);
+
+    const result = await runCli(
+      ["--session", session.session_id, "--compact", "continue"],
+      provider,
+      repoRoot,
+      homeRoot,
+    );
+
+    expect(result.stdout).toBe("after compact\n");
+    const runIds = await readdir(join(sessionsDir, session.session_id, "runs"));
+    expect(runIds).toHaveLength(2);
+    const summaries = await Promise.all(
+      runIds.map(async (runId) =>
+        JSON.parse(await readFile(join(sessionsDir, session.session_id, "runs", runId, "summary.json"), "utf8")),
+      ),
+    );
+    expect(summaries.map((summary) => summary.run_kind).sort()).toEqual(["compaction", "prompt"]);
+  });
 });
 
 describe("goat doctor", () => {
   async function runDoctorCli(
     repoRoot: string,
-    homeRoot: string,
+    _homeRoot: string,
     options?: { fetchImpl?: typeof fetch; goatToml?: string },
   ): Promise<{ stdout: string; exitCode: number | undefined }> {
     if (options?.goatToml !== undefined) {
@@ -741,7 +1100,7 @@ describe("goat doctor", () => {
       processCwd: repoRoot,
       env: {
         ...process.env,
-        GOAT_HOME_ROOT: homeRoot,
+        GOAT_HOME_DIR: repoRoot,
         OPENAI_API_KEY: "test-key",
       },
       fetchImpl: options?.fetchImpl ?? (async () => new Response(null, { status: 200 })),

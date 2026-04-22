@@ -5,14 +5,13 @@ This file captures the detailed work that did not fully land in the first implem
 ## Deliberate Deviations In The First Pass
 
 - Compaction currently uses a deterministic local checkpoint heuristic instead of a model-generated compaction run.
-- Pre-run compaction is persisted only when the prompt run commits successfully; it is not yet recorded as a separate maintenance run.
+- Manual and `--compact` pre-run compaction now persist explicit `compaction` runs; automatic mid-run crisis compaction is still not implemented.
 - Mid-run crisis compaction and checkpoint rebuilding of the live unresolved loop are not implemented yet.
-- Assistant text streaming is surfaced only during `--verbose` runs instead of always writing progress to stderr.
+- Assistant text is kept off stderr; `--verbose` emits numbered progress events without duplicating the final reply.
 
 ## Highest-Value Next Steps
 
 - Replace the local compaction heuristic with a real provider-backed compaction flow using the built-in prompt in [compaction-prompt.md](../../src/builtins/compaction-prompt.md).
-- Persist pre-send compaction as an explicit `compaction` run with its own `transcript.jsonl`, `provider.jsonl`, and `summary.json`.
 - Add mid-run safe-point compaction that can rebuild the working set, drop `previous_response_id`, and continue after a checkpoint.
 - Preserve and persist richer provider metadata, including normalized retry records and sanitized error details.
 - Add real fsync-backed durable commit boundaries instead of the current best-effort atomic rename approach.

@@ -21,35 +21,38 @@ export type DebugEvent = {
 export interface DebugSink {
   readonly enabled: boolean;
   readonly mode: DebugMode;
+  setMaxChars(limit: number): void;
   emit(category: DebugCategory, event: string, data?: Record<string, unknown>): Promise<void>;
 }
 
+const DEFAULT_STDERR_MESSAGE_LIMIT = 2000;
 const HUMAN_OBJECT_LIMIT = 420;
 const HUMAN_STRING_LIMIT = 180;
 const JSON_PREVIEW_LIMIT = PREVIEW_CHAR_LIMIT;
 const PREVIEW_INPUT_LIMIT = 8;
 
-const CATEGORY_COLORS: Record<DebugCategory, number> = {
-  config: 90,
-  session: 90,
-  context: 36,
-  compaction: 36,
-  provider: 34,
-  tool: 33,
-  run: 35,
-  error: 31,
-};
-
-function colorize(value: string, color: number, enabled: boolean): string {
-  return enabled ? `\u001B[${color}m${value}\u001B[0m` : value;
-}
-
 function isSimpleToken(value: string): boolean {
   return /^[A-Za-z0-9._/:@-]+$/.test(value);
 }
 
-function truncateText(value: string, limit: number): string {
-  return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - 3))}...`;
+function truncateText(value: string, limit: number, suffix = "..."): string {
+  return value.length <= limit ? value : `${value.slice(0, Math.max(0, limit - suffix.length))}${suffix}`;
+}
+
+function capStderrMessage(value: string, limit: number): string {
+  if (value.length <= limit) {
+    return value;
+  }
+  let omitted = value.length - limit;
+  while (true) {
+    const suffix = `…[+${omitted} chars]`;
+    const visible = Math.max(0, limit - suffix.length);
+    const actualOmitted = value.length - visible;
+    if (actualOmitted === omitted) {
+      return `${value.slice(0, visible)}${suffix}`;
+    }
+    omitted = actualOmitted;
+  }
 }
 
 function previewText(value: string, limit: number): string {
@@ -74,39 +77,77 @@ function formatHumanValue(value: unknown): string {
   return truncateText(JSON.stringify(value), HUMAN_OBJECT_LIMIT);
 }
 
-function renderHuman(event: DebugEvent, useColor: boolean): string {
-  const category = colorize(event.category, CATEGORY_COLORS[event.category], useColor);
-  const prefix = `[debug][${category}][${event.ts.slice(11, 23)}]`;
+function stderrKind(event: DebugEvent): string {
+  if (event.category === "tool" && event.event === "start") {
+    return "Tool Call";
+  }
+  if (event.category === "tool" && event.event === "finish") {
+    return "Tool Result";
+  }
+  if (event.category === "error") {
+    return "Error";
+  }
+  return "System";
+}
+
+function displayLabel(event: DebugEvent): string {
+  if (event.category === "tool" && typeof event.data.tool_name === "string") {
+    return event.data.tool_name
+      .split("_")
+      .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+      .join(" ");
+  }
+  return `${event.category}:${event.event}`;
+}
+
+function renderMessage(event: DebugEvent): string {
   const fields = Object.entries(event.data)
     .filter(([, value]) => value !== undefined)
     .map(([key, value]) => `${key}=${formatHumanValue(value)}`)
     .join(" ");
 
-  return fields ? `${prefix} ${event.event} ${fields}\n` : `${prefix} ${event.event}\n`;
+  return fields ? `${event.event} ${fields}` : event.event;
 }
 
-export function createDebugSink(stderr: Writable, options: Pick<RunOptions, "debug" | "debugJson">): DebugSink {
-  const mode: DebugMode = options.debugJson ? "json" : options.debug ? "human" : "off";
+export function createDebugSink(
+  stderr: Writable,
+  options: Pick<RunOptions, "verbose" | "debug" | "debugJson">,
+): DebugSink {
+  const mode: DebugMode = options.debugJson ? "json" : options.debug || options.verbose ? "human" : "off";
+  let sequence = 0;
+  let maxChars = DEFAULT_STDERR_MESSAGE_LIMIT;
   if (mode === "off") {
     return {
       enabled: false,
       mode,
+      setMaxChars(limit: number) {
+        maxChars = limit;
+      },
       async emit() {},
     };
   }
 
-  const useColor = mode === "human" && (stderr as Writable & { isTTY?: boolean }).isTTY === true;
   return {
     enabled: true,
     mode,
+    setMaxChars(limit: number) {
+      maxChars = limit;
+    },
     async emit(category, event, data = {}) {
+      sequence += 1;
       const record: DebugEvent = {
         ts: nowIso(),
         category,
         event,
         data,
       };
-      const line = mode === "json" ? `${JSON.stringify(record)}\n` : renderHuman(record, useColor);
+      const kind = stderrKind(record);
+      const label = displayLabel(record);
+      const message = capStderrMessage(renderMessage(record), maxChars);
+      const line =
+        mode === "json"
+          ? `${JSON.stringify({ seq: sequence, ts: record.ts, kind, label, message, data: sanitizeDebugData(data) })}\n`
+          : `[${sequence}] [${kind}] [${label}] ${message}\n`;
       await writeText(stderr, line);
     },
   };

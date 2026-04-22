@@ -36,12 +36,20 @@ goat runs show --session <id|last> <run-id>  Print run summary.json
 
 If `--session` is omitted from `runs list`, it defaults to `last`.
 
+### Compaction
+
+```
+goat compact session <id|last>  Run deterministic session-history compaction
+```
+
 ### Definitions and metadata
 
 ```
 goat agents      List agent definitions (one per line, sorted)
 goat roles       List role definitions
 goat prompts     List prompt definitions
+goat skills      List resolved skills grouped by agent
+goat scenarios   List scenario definitions
 goat version     Print the CLI version
 goat doctor      Run preflight checks
 ```
@@ -55,6 +63,9 @@ goat doctor      Run preflight checks
 | `--role <name>` | Apply a role overlay | yes |
 | `--no-role` | Clear the stored role | yes |
 | `--prompt <name>` | One-turn prompt prefix | no |
+| `--skill <id>` | Invoke one skill for this turn. Repeatable. | no |
+| `--compact` | Run deterministic compaction before the prompt turn starts | no |
+| `--scenario <id>` | Run a scenario chain. Only valid with new sessions. | no |
 | `--model <name>` | Override model | yes |
 | `--effort <level>` | Reasoning effort | yes |
 | `--timeout <dur>` | Run timeout | no |
@@ -62,6 +73,7 @@ goat doctor      Run preflight checks
 | `--cwd <path>` | Tool working directory | yes |
 | `--verbose` | Stream progress to stderr | no |
 | `--debug` | Debug diagnostics (implies --verbose) | no |
+| `--debug-json` | Debug diagnostics as JSON lines | no |
 
 "Sticky" means the value persists to the session on commit and is reused by later runs unless overridden.
 
@@ -80,6 +92,18 @@ Roles are mutable overlays. `--role` applies a role; `--no-role` clears it. Thes
 ### `--prompt <name>`
 
 Prepends the named prompt text to the user message for one run only. Not sticky.
+
+### `--skill <id>`
+
+Injects a loaded skill into the current user turn. When both `--prompt` and `--skill` are present, the prompt text comes first, then skill invocation text, then the raw message. Skills are never sticky.
+
+### `--compact`
+
+Runs the same deterministic session compaction as `goat compact session <id|last>` after session/fork resolution and before prompt assembly. On a new empty session this is a no-op.
+
+### `--scenario <id>`
+
+Runs a scenario definition from `scenarios/<id>.toml`. Scenario v1 is sequential: each step runs in a fresh session, and the final step's assistant reply is the only prompt-run stdout. `--scenario` cannot be combined with `--agent`, `--role`, `--no-role`, `--prompt`, `--skill`, or `--fork`.
 
 ### `--effort <level>`
 
@@ -117,13 +141,15 @@ Reserved for user-consumable command results only:
 - `goat version`: version string
 - `goat sessions new`: session ID
 - `goat sessions last`: session ID
-- `goat agents/roles/prompts`: one name per line
+- `goat compact session`: compaction run ID when a run is created
+- `goat agents/roles/prompts/scenarios`: one name per line
+- `goat skills`: skills grouped by agent
 - `goat sessions show`: pretty-printed JSON
 - `goat runs show`: pretty-printed JSON
 
 ### Stderr
 
-Everything else: streaming deltas, verbose progress, tool traces, session notices, errors, debug diagnostics.
+Default successful prompt runs write no stderr. Errors go to stderr. With `--verbose`, `--debug`, or `--debug-json`, Goat emits numbered capped events for system status, tool calls/results, and errors. Assistant text deltas and the final assistant reply are never streamed to stderr.
 
 ### Doctor output
 

@@ -31,6 +31,10 @@ export type CommandOutput = {
    */
   stderr: string;
   exitCode: number;
+  meta?: {
+    session_id?: string;
+    run_id?: string;
+  };
 };
 
 export async function loadBaseContext(processCwd: string, env: NodeJS.ProcessEnv): Promise<BaseContext> {

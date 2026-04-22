@@ -47,7 +47,7 @@ system_prompt = "Coder."
     repoRoot,
     homeRoot,
     env: {
-      GOAT_HOME_ROOT: homeRoot,
+      GOAT_HOME_DIR: repoRoot,
       OPENAI_API_KEY: "doctor-test-key",
       PATH: process.env.PATH,
     },
@@ -67,7 +67,7 @@ describe("runDoctor", () => {
 
   test("reports FAIL openai_credentials when no API key is available", async () => {
     const { repoRoot, env } = await makeRepo();
-    const strippedEnv = { GOAT_HOME_ROOT: env.GOAT_HOME_ROOT, PATH: env.PATH };
+    const strippedEnv = { GOAT_HOME_DIR: env.GOAT_HOME_DIR, PATH: env.PATH };
     const output = await runDoctor(repoRoot, strippedEnv, {
       fetchImpl: async () => new Response(null, { status: 200 }),
     });
@@ -164,7 +164,7 @@ enabled = true
     // Mirrors how `runApp` composes `env` + `deps.env`. If both set, `deps.env`
     // should still win so app.ts callers see the same behaviour as before.
     const { repoRoot, env } = await makeRepo();
-    const misleadingEnv = { GOAT_HOME_ROOT: env.GOAT_HOME_ROOT, PATH: env.PATH };
+    const misleadingEnv = { GOAT_HOME_DIR: env.GOAT_HOME_DIR, PATH: env.PATH };
     const output = await runDoctor(repoRoot, misleadingEnv, {
       env,
       fetchImpl: async () => new Response(null, { status: 200 }),

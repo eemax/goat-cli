@@ -1,3 +1,4 @@
+import { formatAvailableSkillsXml, formatSkillInvocation } from "./skills.js";
 import type { AgentDef, CompactionState, MessageRecord, PromptDef, RoleDef } from "./types.js";
 import { estimateTokensConservative } from "./utils.js";
 
@@ -9,6 +10,7 @@ export type PromptMessage = {
 export type PromptAssembly = {
   instructions: string;
   input: PromptMessage[];
+  current_user_content: string;
   estimated_tokens: number;
   compaction_checkpoint: string | null;
 };
@@ -80,24 +82,30 @@ function buildInstructions(agent: AgentDef, role: RoleDef | null, checkpoint: st
   if (role) {
     parts.push(role.system_prompt);
   }
+  parts.push(formatAvailableSkillsXml(agent.skills));
   if (checkpoint) {
     parts.push(checkpoint);
   }
   return parts.join("\n\n").trim();
 }
 
-function buildPrimaryMessage(prompt: PromptDef | null, rawMessage: string): string {
-  if (!prompt) {
-    return rawMessage;
+function buildPrimaryMessage(prompt: PromptDef | null, skills: AgentDef["skills"], rawMessage: string): string {
+  const parts: string[] = [];
+  if (prompt) {
+    parts.push(prompt.text);
   }
-
-  return `${prompt.text}\n\n${rawMessage}`;
+  for (const skill of skills) {
+    parts.push(formatSkillInvocation(skill));
+  }
+  parts.push(rawMessage);
+  return parts.join("\n\n");
 }
 
 export function assemblePrompt(params: {
   agent: AgentDef;
   role: RoleDef | null;
   prompt: PromptDef | null;
+  skills: AgentDef["skills"];
   compaction: CompactionState | null;
   sessionMessages: MessageRecord[];
   userMessage: string;
@@ -113,9 +121,10 @@ export function assemblePrompt(params: {
     });
   }
 
+  const currentUserContent = buildPrimaryMessage(params.prompt, params.skills, params.userMessage);
   input.push({
     role: "user",
-    content: buildPrimaryMessage(params.prompt, params.userMessage),
+    content: currentUserContent,
   });
 
   if (params.stdinText !== null) {
@@ -131,6 +140,7 @@ export function assemblePrompt(params: {
   return {
     instructions,
     input,
+    current_user_content: currentUserContent,
     estimated_tokens,
     compaction_checkpoint: checkpoint,
   };

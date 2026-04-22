@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Readable } from "node:stream";
 
-import { maybeCompactReplay } from "./compaction.js";
+import { compactSessionHistory, maybeCompactReplay } from "./compaction.js";
 import { exists, resolveOpenAIApiKey } from "./config.js";
 import type { DebugSink } from "./debug.js";
 import { summarizePromptMessages } from "./debug.js";
@@ -29,6 +29,7 @@ import type {
   PromptDef,
   RoleDef,
   SessionMeta,
+  SkillDef,
 } from "./types.js";
 import { isErrnoException } from "./utils.js";
 
@@ -40,6 +41,7 @@ export type PreparedRun = {
   agent: AgentDef;
   role: RoleDef | null;
   prompt: PromptDef | null;
+  skills: SkillDef[];
   modelId: string;
   providerModel: string;
   modelContextWindow: number | null;
@@ -179,22 +181,25 @@ export async function prepareRunExecution(
   const processCwd = deps?.processCwd ?? process.cwd();
   const env = deps?.env ?? process.env;
   const context = await loadAppContext(await loadBaseContext(processCwd, env));
+  debug?.setMaxChars?.(context.config.runtime.stderr_message_max_chars);
 
-  const homeConfigPath = join(context.roots.homeRoot, "goat.toml");
-  const repoConfigPath = context.roots.repoRoot ? join(context.roots.repoRoot, "goat.toml") : null;
   await debug?.emit("config", "loaded", {
-    repo_root: context.roots.repoRoot,
+    config_roots: context.roots.configRoots,
     home_root: context.roots.homeRoot,
-    loaded_config_paths: [
-      ...((await exists(homeConfigPath)) ? [homeConfigPath] : []),
-      ...(repoConfigPath && (await exists(repoConfigPath)) ? [repoConfigPath] : []),
-    ],
+    loaded_config_paths: (
+      await Promise.all(
+        context.roots.configRoots.map(async (root) => {
+          const path = join(root, "goat.toml");
+          return (await exists(path)) ? path : null;
+        }),
+      )
+    ).filter((path): path is string => path !== null),
     sessions_dir: context.config.paths.sessions_dir,
     shadowed_model_aliases: context.models.shadowedAliases,
   });
 
   const sessionResolution = await resolveRunSession(context, command);
-  const sessionMeta = sessionResolution.sessionMeta;
+  let sessionMeta = sessionResolution.sessionMeta;
   await ensureSessionCanRun(sessionMeta);
 
   const agentName = command.options.agent ?? sessionMeta.agent_name ?? context.config.defaults.agent;
@@ -208,6 +213,18 @@ export async function prepareRunExecution(
   const agent = context.definitions.agents.get(agentName);
   if (!agent) {
     throw notFoundError(`agent \`${agentName}\` was not found`);
+  }
+
+  const skills: SkillDef[] = [];
+  if (command.options.skills.length > 0 && !agent.skills_enabled) {
+    throw usageError(`agent \`${agent.name}\` has skills disabled`);
+  }
+  for (const skillId of command.options.skills) {
+    const skill = agent.skills.find((candidate) => candidate.id === skillId);
+    if (!skill) {
+      throw notFoundError(`skill \`${skillId}\` was not found for agent \`${agent.name}\``);
+    }
+    skills.push(skill);
   }
 
   const roleName = resolveRoleName(sessionMeta, command);
@@ -229,6 +246,28 @@ export async function prepareRunExecution(
   const effectiveCwd = determineEffectiveCwd(command, sessionMeta, processCwd);
   await ensureExistingDirectory(effectiveCwd);
 
+  if (command.options.compact) {
+    const result = await compactSessionHistory({
+      context,
+      sessionMeta,
+      agent,
+      modelId,
+      cwd: effectiveCwd,
+      reason: "Manual compaction before prompt run.",
+    });
+    await debug?.emit("compaction", "manual", {
+      trigger: "flag",
+      run_id: result.runId,
+      changed: result.changed,
+      original_session_messages: result.originalMessages,
+      retained_session_messages: result.retainedMessages,
+      compaction_count: result.compactionCount,
+    });
+    if (result.changed) {
+      sessionMeta = await loadSessionMeta(context.config.paths.sessions_dir, sessionMeta.session_id);
+    }
+  }
+
   const timeoutSeconds = command.options.timeoutSeconds ?? agent.run_timeout ?? context.config.runtime.run_timeout;
   const stdinText = await readOptionalStdin(stdin, context.config.runtime.max_stdin);
   const sessionMessages = await readMessages(context.config.paths.sessions_dir, sessionMeta.session_id);
@@ -240,6 +279,7 @@ export async function prepareRunExecution(
     agent,
     role,
     prompt,
+    skills,
     compaction: currentCompaction,
     sessionMessages: retainedMessages,
     userMessage: command.message,
@@ -258,6 +298,7 @@ export async function prepareRunExecution(
     agent: agent.name,
     role: role?.name ?? null,
     prompt: prompt?.name ?? null,
+    skills: skills.map((skill) => skill.id),
     model: modelId,
     provider_model: providerModel,
     model_source_path: model.source_path,
@@ -301,6 +342,7 @@ export async function prepareRunExecution(
       agent,
       role,
       prompt,
+      skills,
       compaction: pendingCompactionState ?? currentCompaction,
       sessionMessages: retainedMessages,
       userMessage: command.message,
@@ -348,6 +390,7 @@ export async function prepareRunExecution(
     agent,
     role,
     prompt,
+    skills,
     modelId,
     providerModel,
     modelContextWindow,

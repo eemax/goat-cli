@@ -9,55 +9,57 @@ This document defines Goat's configuration surfaces for V1:
 - agent definitions in `agents/*.toml`
 - role definitions in `roles/*.toml`
 - prompt definitions in `prompts/*.toml`
+- skill folders containing `SKILL.md`
+- scenario definitions in `scenarios/*.toml`
 
 The design takes inspiration from `headless-agent` and `agent-commander`, but intentionally improves a few things:
 
 - global config uses a specific file name, `goat.toml`, instead of a generic `config.toml`
 - provider credentials live in global config, not agent files
-- repo-root discovery is explicit and runtime-based, not compiled into the binary
-- repo and home config are merged predictably
+- the global root stack is explicit and runtime-based, not compiled into the binary
+- layered config roots are merged predictably
 - definitions stay behavior-focused and do not carry product-specific baggage
 
 ## Resolution Model
 
-Goat resolves configuration from exactly two roots:
+Goat resolves configuration from an ordered global root stack:
 
-1. repo root
-2. `~/.goat/`
+1. `~/goat-cli/`
+2. `~/.config/goat/`
+3. `$GOAT_HOME_DIR`, when set
 
 The effective config is built in this order:
 
-1. home root
-2. repo root
+1. lower-priority global roots
+2. higher-priority global roots
 3. environment fallbacks where documented
 4. explicit CLI flags
 
-Repo root values override home root values.
+Later roots override earlier roots. Repo-local discovery, cwd markers, `GOAT_REPO_ROOT`, `GOAT_HOME_ROOT`, and `~/.goat/` are ignored.
 
-## Repo Root Discovery
+## Global Root Discovery
 
-Repo root discovery must be explicit.
+Global root discovery must be explicit.
 
-Goat should determine the repo root by walking upward from the process working directory and selecting the nearest ancestor that contains either:
+Goat should build the root stack from the OS home directory plus optional `$GOAT_HOME_DIR`:
 
-- `goat.toml`
-- `.goat`
+- `~/goat-cli/`
+- `~/.config/goat/`
+- `$GOAT_HOME_DIR`, when set
 
-If neither marker is found, Goat has no repo root for that invocation and falls back to the home root only.
-
-This is intentional. Goat must not guess that an arbitrary Git repository is a Goat repo just because it contains common directory names.
+This is intentional. Goat must not guess that an arbitrary directory is a Goat root because it contains common file or directory names.
 
 Important rules:
 
-- `--cwd` does not affect repo-root discovery
+- `--cwd` does not affect root discovery or definition resolution
 - installed binaries must use runtime discovery, never a compiled-in source checkout path
-- test harnesses may override discovery with `GOAT_REPO_ROOT` and `GOAT_HOME_ROOT`
+- test harnesses may provide an explicit root stack or set `GOAT_HOME_DIR`
 
 ## Files And Directories
 
-### Repo root
+### Config root
 
-Expected repo-local surfaces:
+Expected config-root surfaces:
 
 ```text
 goat.toml
@@ -66,38 +68,22 @@ agents/
 roles/
 prompts/
 skills/
+scenarios/
+sessions/
 ```
 
-### Home root
-
-Expected home-root surfaces:
-
-```text
-~/.goat/
-  goat.toml
-  models.toml
-  agents/
-  roles/
-  prompts/
-  skills/
-  sessions/
-```
-
-`skills/` is reserved in V1 but not expanded beyond directory resolution.
+Skills are enabled per agent with a `[skills]` block. Scenarios are loaded from `scenarios/*.toml`.
 
 ## Merge Semantics
 
 ### Global config
 
-Global config is loaded from:
+Global config is loaded from each configured root's `goat.toml`, when present.
 
-- `<repo-root>/goat.toml`
-- `~/.goat/goat.toml`
+If multiple layers exist, Goat should deep-merge them by section:
 
-If both exist, Goat should deep-merge them by section:
-
-- scalar values: repo overrides home
-- arrays: repo replaces home
+- scalar values: higher-priority roots override lower-priority roots
+- arrays: higher-priority roots replace lower-priority roots
 - objects: merge recursively
 
 Unknown keys must fail validation.
@@ -106,22 +92,19 @@ Unknown keys must fail validation.
 
 Definitions are loaded by name:
 
-- repo definitions shadow home definitions with the same name
-- home definitions are used when no repo definition exists for that name
+- higher-priority definitions shadow lower-priority definitions with the same filename
+- lower-priority definitions are used when no higher-priority definition exists for that name
 
 List commands should show the resolved set, not duplicates.
 
 ### Models
 
-The model catalog is loaded from:
+The model catalog is loaded from each configured root's `models.toml`, when present.
 
-- `<repo-root>/models.toml`
-- `~/.goat/models.toml`
+If multiple layers exist, entries merge by canonical model `id`:
 
-If both exist, entries merge by canonical model `id`:
-
-- repo entries override home entries for the same `id`
-- repo aliases shadow colliding home aliases from different models
+- higher-priority entries override lower-priority entries for the same `id`
+- higher-priority aliases shadow colliding lower-priority aliases from different models
 - collisions inside the same precedence layer are validation errors
 - `--model` and agent `default_model` resolve against model `id` or alias
 - shadowed aliases should be surfaced by `goat doctor` and `--debug`
@@ -171,8 +154,9 @@ api_key_env = "OPENAI_API_KEY"
 timeout = 45
 
 [runtime]
-max_stdin_mb = 8
-run_timeout = 7200
+max_stdin = "8mb"
+run_timeout = "2h"
+stderr_message_max_chars = "2k"
 
 [compaction]
 model = "gpt-5.4-mini"
@@ -214,13 +198,12 @@ The global section references below describe `goat.toml`.
 `sessions_dir`
 
 - type: string path
-- default: the resolved home-root `sessions/` directory
+- default: the highest-priority config root's `sessions/` directory
 - meaning: root directory containing session folders
 - notes:
-  - `~` and `~/...` resolve from filesystem root
-  - `.` and `./...` resolve from the discovered repo root
+  - `~` and `~/...` resolve from the OS home directory
+  - `.` and `./...` resolve from the containing `goat.toml`
   - other relative paths resolve relative to the containing `goat.toml`
-  - repo-root-anchored paths fail if no repo root was discovered
 
 ### `models.toml`
 
@@ -349,17 +332,17 @@ This section is intentionally modular even though V1 supports only one provider 
 
 ### `goat.toml` `[runtime]`
 
-`max_stdin_mb`
+`max_stdin`
 
-- type: positive number
-- default: `8`
+- type: size
+- default: `8mb`
 - meaning: hard safety limit for stdin payload size
 - notes: Goat reads stdin until EOF before provider execution and fails immediately if this limit is exceeded
 
 `run_timeout`
 
-- type: positive number
-- default: `7200`
+- type: duration
+- default: `2h`
 - meaning: total wall-clock timeout for the entire run
 
 ### `goat.toml` `[compaction]`
@@ -516,10 +499,7 @@ For Exa in future `web_search`, precedence should be:
 
 ## Agent Files
 
-Supported locations:
-
-- `<repo-root>/agents/<name>.toml`
-- `~/.goat/agents/<name>.toml`
+Supported location: `<root>/agents/<name>.toml` for any configured root.
 
 Agent files define runnable behavior. They should not contain provider credentials.
 
@@ -605,10 +585,7 @@ Exactly one of:
 
 ## Role Files
 
-Supported locations:
-
-- `<repo-root>/roles/<name>.toml`
-- `~/.goat/roles/<name>.toml`
+Supported location: `<root>/roles/<name>.toml` for any configured root.
 
 Roles are sticky system-prompt overlays.
 
@@ -639,10 +616,7 @@ Exactly one of:
 
 ## Prompt Files
 
-Supported locations:
-
-- `<repo-root>/prompts/<name>.toml`
-- `~/.goat/prompts/<name>.toml`
+Supported location: `<root>/prompts/<name>.toml` for any configured root.
 
 Prompts are one-turn user-message overlays. They are never sticky session state.
 
@@ -711,7 +685,6 @@ Effective run values should resolve in this order:
 
 V1 should make room for:
 
-- active `skills/` behavior
 - additional provider kinds
 - additional transport kinds
 - richer subagent policy

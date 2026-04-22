@@ -3,9 +3,17 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { listDefinitionFiles, loadDefinitions, loadModelCatalog, resolveModel, resolveModelId } from "../src/defs.js";
+import type { ConfigRoots } from "../src/types.js";
 import { createTempDir, useCleanup } from "./helpers.js";
 
 const { track } = useCleanup();
+
+function roots(...configRoots: string[]): ConfigRoots {
+  return {
+    configRoots,
+    homeRoot: configRoots[configRoots.length - 1]!,
+  };
+}
 
 describe("loadModelCatalog", () => {
   test("rejects duplicate model ids within a single layer", async () => {
@@ -22,7 +30,7 @@ id = "gpt-5.4-mini"
 `,
     );
 
-    await expect(loadModelCatalog({ repoRoot: null, homeRoot: home })).rejects.toThrow(/duplicate model id/);
+    await expect(loadModelCatalog(roots(home))).rejects.toThrow(/duplicate model id/);
   });
 
   test("rejects duplicate aliases within a single layer", async () => {
@@ -41,7 +49,7 @@ aliases = ["m"]
 `,
     );
 
-    await expect(loadModelCatalog({ repoRoot: null, homeRoot: home })).rejects.toThrow(/duplicate model alias/);
+    await expect(loadModelCatalog(roots(home))).rejects.toThrow(/duplicate model alias/);
   });
 
   test("records shadowed aliases when repo layer overrides home", async () => {
@@ -66,7 +74,7 @@ aliases = ["shared"]
 `,
     );
 
-    const catalog = await loadModelCatalog({ repoRoot: repo, homeRoot: home });
+    const catalog = await loadModelCatalog(roots(home, repo));
     expect(catalog.shadowedAliases).toContain("shared");
     expect(resolveModelId(catalog, "shared")).toBe("gpt-5.4");
   });
@@ -81,7 +89,7 @@ aliases = ["shared"]
 id = "gpt-5.4-mini"
 `,
     );
-    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
+    const catalog = await loadModelCatalog(roots(home));
     expect(() => resolveModel(catalog, "nonsense")).toThrow(/unknown model/);
   });
 
@@ -98,14 +106,14 @@ provider_model = "gpt-5.4-mini"
 aliases = ["mini"]
 `,
     );
-    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
+    const catalog = await loadModelCatalog(roots(home));
     expect(resolveModelId(catalog, "mini")).toBe("gpt-5.4-mini");
   });
 
   test("returns empty catalog when no models.toml layer exists", async () => {
     const home = await createTempDir("goat-defs-");
     track(home);
-    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
+    const catalog = await loadModelCatalog(roots(home));
     expect(catalog.byId.size).toBe(0);
     expect(catalog.aliasToId.size).toBe(0);
     expect(catalog.shadowedAliases).toEqual([]);
@@ -138,8 +146,8 @@ enabled_tools = ["read_file", "magic_tool"]
 system_prompt = "..."
 `,
     );
-    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
-    await expect(loadDefinitions({ repoRoot: null, homeRoot: home }, catalog)).rejects.toThrow(/enables unknown tool/);
+    const catalog = await loadModelCatalog(roots(home));
+    await expect(loadDefinitions(roots(home), catalog)).rejects.toThrow(/enables unknown tool/);
   });
 
   test("rejects an agent with neither inline prompt nor prompt file", async () => {
@@ -155,10 +163,8 @@ default_model = "mini"
 enabled_tools = ["read_file"]
 `,
     );
-    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
-    await expect(loadDefinitions({ repoRoot: null, homeRoot: home }, catalog)).rejects.toThrow(
-      /exactly one of.*system_prompt/,
-    );
+    const catalog = await loadModelCatalog(roots(home));
+    await expect(loadDefinitions(roots(home), catalog)).rejects.toThrow(/exactly one of.*system_prompt/);
   });
 
   test("rejects an agent with BOTH inline prompt and prompt file", async () => {
@@ -177,8 +183,8 @@ system_prompt = "inline"
 system_prompt_file = "./coder.md"
 `,
     );
-    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
-    await expect(loadDefinitions({ repoRoot: null, homeRoot: home }, catalog)).rejects.toThrow(/exactly one of/);
+    const catalog = await loadModelCatalog(roots(home));
+    await expect(loadDefinitions(roots(home), catalog)).rejects.toThrow(/exactly one of/);
   });
 
   test("rejects an agent referencing an unknown default model", async () => {
@@ -195,8 +201,8 @@ enabled_tools = ["read_file"]
 system_prompt = "..."
 `,
     );
-    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
-    await expect(loadDefinitions({ repoRoot: null, homeRoot: home }, catalog)).rejects.toThrow(/unknown model/);
+    const catalog = await loadModelCatalog(roots(home));
+    await expect(loadDefinitions(roots(home), catalog)).rejects.toThrow(/unknown model/);
   });
 
   test("rejects a prompt definition with neither text nor text_file", async () => {
@@ -211,8 +217,8 @@ name = "summary"
 description = "broken"
 `,
     );
-    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
-    await expect(loadDefinitions({ repoRoot: null, homeRoot: home }, catalog)).rejects.toThrow(/exactly one of.*text/);
+    const catalog = await loadModelCatalog(roots(home));
+    await expect(loadDefinitions(roots(home), catalog)).rejects.toThrow(/exactly one of.*text/);
   });
 
   test("applies agent defaults when optional fields are omitted", async () => {
@@ -229,14 +235,101 @@ enabled_tools = ["read_file"]
 system_prompt = "..."
 `,
     );
-    const catalog = await loadModelCatalog({ repoRoot: null, homeRoot: home });
-    const defs = await loadDefinitions({ repoRoot: null, homeRoot: home }, catalog);
+    const catalog = await loadModelCatalog(roots(home));
+    const defs = await loadDefinitions(roots(home), catalog);
     const coder = defs.agents.get("coder");
     expect(coder).toBeDefined();
     expect(coder?.max_output_tokens).toBe(12000);
     expect(coder?.compact_at_tokens).toBe(180000);
     expect(coder?.default_effort).toBeNull();
     expect(coder?.run_timeout).toBeNull();
+    expect(coder?.skills_enabled).toBe(false);
+    expect(coder?.skills).toEqual([]);
+  });
+
+  test("loads enabled agent skills from SKILL.md files", async () => {
+    const home = await createTempDir("goat-defs-");
+    track(home);
+    await writeMinimalCatalog(home);
+    await mkdir(join(home, "agents"), { recursive: true });
+    await mkdir(join(home, "skills", "research-helper"), { recursive: true });
+    await writeFile(
+      join(home, "skills", "research-helper", "SKILL.md"),
+      "---\nname: Research\ndescription: Find useful context\n---\n\n# Research\n",
+    );
+    await writeFile(
+      join(home, "agents", "coder.toml"),
+      `
+name = "coder"
+default_model = "mini"
+enabled_tools = ["read_file"]
+system_prompt = "..."
+
+[skills]
+enabled = true
+path = "../skills"
+`,
+    );
+
+    const catalog = await loadModelCatalog(roots(home));
+    const defs = await loadDefinitions(roots(home), catalog);
+    const coder = defs.agents.get("coder");
+    expect(coder?.skills_enabled).toBe(true);
+    expect(coder?.skills.map((skill) => skill.id)).toEqual(["research_helper"]);
+    expect(coder?.skills[0]?.name).toBe("Research");
+  });
+
+  test("rejects enabled skills with a missing path", async () => {
+    const home = await createTempDir("goat-defs-");
+    track(home);
+    await writeMinimalCatalog(home);
+    await mkdir(join(home, "agents"), { recursive: true });
+    await writeFile(
+      join(home, "agents", "coder.toml"),
+      `
+name = "coder"
+default_model = "mini"
+enabled_tools = ["read_file"]
+system_prompt = "..."
+
+[skills]
+enabled = true
+`,
+    );
+
+    const catalog = await loadModelCatalog(roots(home));
+    await expect(loadDefinitions(roots(home), catalog)).rejects.toThrow(/skills.path/);
+  });
+
+  test("rejects duplicate normalized skill ids", async () => {
+    const home = await createTempDir("goat-defs-");
+    track(home);
+    await writeMinimalCatalog(home);
+    await mkdir(join(home, "agents"), { recursive: true });
+    await mkdir(join(home, "skills", "review-helper"), { recursive: true });
+    await mkdir(join(home, "skills", "review_helper"), { recursive: true });
+    for (const folder of ["review-helper", "review_helper"]) {
+      await writeFile(
+        join(home, "skills", folder, "SKILL.md"),
+        "---\nname: Review\ndescription: Review things\n---\n\n# Review\n",
+      );
+    }
+    await writeFile(
+      join(home, "agents", "coder.toml"),
+      `
+name = "coder"
+default_model = "mini"
+enabled_tools = ["read_file"]
+system_prompt = "..."
+
+[skills]
+enabled = true
+path = "../skills"
+`,
+    );
+
+    const catalog = await loadModelCatalog(roots(home));
+    await expect(loadDefinitions(roots(home), catalog)).rejects.toThrow(/duplicate skill id/);
   });
 });
 
@@ -251,7 +344,7 @@ describe("listDefinitionFiles shadowing", () => {
     await writeFile(join(repo, "agents", "coder.toml"), "# repo");
     await writeFile(join(home, "agents", "reviewer.toml"), "# reviewer only in home");
 
-    const files = await listDefinitionFiles({ repoRoot: repo, homeRoot: home }, "agents");
+    const files = await listDefinitionFiles(roots(home, repo), "agents");
     const names = files.map((file) => file.name);
     expect(names).toEqual(["coder", "reviewer"]);
     const coder = files.find((file) => file.name === "coder");

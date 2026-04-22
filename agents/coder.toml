@@ -15,3 +15,7 @@ enabled_tools = [
   "grep",
 ]
 system_prompt_file = "./coder.md"
+
+[skills]
+enabled = true
+path = "../skills"

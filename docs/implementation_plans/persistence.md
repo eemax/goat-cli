@@ -345,7 +345,7 @@ It should capture the ordered sequence of durable run events without dumping raw
 - oversized content should move into `artifacts/` with a preview
 - `tool_result` should store the normalized tool envelope or an artifact reference to it
 - `tool_result` should include `duration_s` as a decimal number of wall-clock seconds
-- progress chatter that matters for debugging may be persisted, but raw streaming deltas do not need to be
+- progress chatter that matters for debugging may be persisted, but assistant text deltas do not need to be
 
 ## `provider.jsonl`
 
@@ -612,7 +612,7 @@ If Goat receives a second signal while already shutting down, it may exit immedi
 V1 intentionally does not persist:
 
 - provider-side cached conversation state outside run files
-- live streaming delta logs as a separate persistent channel
+- live assistant text delta logs as a separate persistent channel
 - skill execution state
 
 ## Retention

@@ -234,7 +234,7 @@ Goat must validate that the effective cwd exists and is a directory before provi
 
 ### `--verbose`
 
-Enable detailed stderr progress, including streaming response text and tool progress notices.
+Enable numbered stderr progress events for system status and tool progress. Assistant text deltas and final replies must stay off stderr.
 
 ### `--debug`
 
@@ -263,11 +263,10 @@ Stderr is used for:
 
 - validation failures
 - provider and tool errors
-- verbose progress logs
-- streaming deltas
-- tool call traces
+- numbered verbose progress logs
+- tool call/result traces
 - created or forked session notices during run commands
-- debug diagnostics
+- numbered debug diagnostics
 
 This split is a hard contract and should not drift over time.
 
@@ -319,7 +318,7 @@ Stdin rules:
 - if stdin is attached to a terminal, it is treated as absent
 - if stdin is non-TTY but zero bytes are read before EOF, it is treated as absent
 - Goat reads stdin fully before provider execution and only until EOF
-- if stdin exceeds `runtime.max_stdin_mb` while reading, Goat must fail before provider execution
+- if stdin exceeds `runtime.max_stdin` while reading, Goat must fail before provider execution
 - stdin must be valid UTF-8 text
 - stdin content is preserved exactly as read, with no newline or Unicode normalization
 - stdin read time counts toward the overall run timeout
@@ -365,10 +364,11 @@ printf '%s\n' 'extra context' | goat new --plan "propose edits"
 
 ## Definition Roots
 
-Goat resolves definitions from exactly two places:
+Goat resolves definitions from an ordered global root stack:
 
-1. repo root
-2. `~/.goat/`
+1. `~/goat-cli/`
+2. `~/.config/goat/`
+3. `$GOAT_HOME_DIR`, when set
 
 Expected definition and catalog surfaces:
 
@@ -378,6 +378,7 @@ agents/
 roles/
 prompts/
 skills/
+scenarios/
 ```
 
 V1 should expose list commands for:
@@ -385,8 +386,10 @@ V1 should expose list commands for:
 - agents
 - roles
 - prompts
+- skills
+- scenarios
 
-`skills/` is reserved for future behavior but should not require a full CLI surface yet.
+Skills are loaded from agent-configured skill folders and exposed through `goat skills` plus repeatable `--skill <id>` turn injection.
 
 `models.toml` is used for model resolution by agents and `--model`, but does not require a top-level listing command in V1.
 
@@ -447,15 +450,15 @@ Important behaviors:
 
 V1 provider behavior:
 
-- OpenAI Responses API
-- HTTP only
-- streaming enabled
+- OpenAI Agents SDK runtime backed by the Responses API
+- HTTP transport through the OpenAI client
+- SDK event handling enabled, with assistant text kept on stdout only
 - no websocket support
 - no Codex auth mode
 
 This should be reflected in the CLI docs and in `goat doctor`.
 
-V1 exposes only one provider and one transport mode, but the implementation should keep real provider and transport seams internally so future additions do not break the CLI or persistence contracts.
+V1 exposes one OpenAI runtime, while keeping the low-level provider seam available for injected tests and compatibility.
 
 ## Plan Mode Contract
 
@@ -519,7 +522,7 @@ Stable V1 table:
 
 Clarifications:
 
-- stdin exceeding `runtime.max_stdin_mb` is exit code `2`
+- stdin exceeding `runtime.max_stdin` is exit code `2`
 - plan-mode shell guard violations are exit code `8`
 - compaction failures use the underlying failure class and should be distinguished in `summary.json.termination_reason`
 
@@ -529,7 +532,7 @@ The CLI contract should leave room for future additions without forcing breaking
 
 - web tooling moving from stub to real implementation
 - subagents moving from stub to real implementation
-- skills becoming active
+- additional scenario inspection commands
 - additional inspection commands
 
 The top-level shape should remain compact and consistent as those features arrive.

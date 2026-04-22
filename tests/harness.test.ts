@@ -6,6 +6,7 @@ import { toolError } from "../src/errors.js";
 import {
   ensurePathExists,
   executeToolCall,
+  exportAgentsSdkTools,
   exportProviderTools,
   resolveToolPath,
   toRelativeDisplayPath,
@@ -32,6 +33,42 @@ describe("exportProviderTools", () => {
 
   test("throws on unknown tool ids", () => {
     expect(() => exportProviderTools(["bash", "not_a_tool"])).toThrow("unknown tool");
+  });
+});
+
+describe("exportAgentsSdkTools", () => {
+  test("wraps Goat tool handlers as Agents SDK function tools", async () => {
+    const context = await createToolContextFixture({ tempPrefix: "goat-harness-agents-", track });
+    await writeFile(join(context.cwd, "note.txt"), "hello from agents\n");
+    const events: string[] = [];
+    const [readFileTool] = exportAgentsSdkTools(["read_file"], context, {
+      onStart: (event) => {
+        events.push(`start:${event.tool_name}:${event.tool_call_id}`);
+      },
+      onFinish: (event) => {
+        events.push(`finish:${event.tool_name}:${event.tool_call_id}:${event.envelope?.ok}`);
+      },
+    });
+
+    expect(readFileTool?.type).toBe("function");
+    if (!readFileTool || readFileTool.type !== "function") {
+      throw new Error("expected function tool");
+    }
+
+    const output = await readFileTool.invoke({} as never, JSON.stringify({ path: "note.txt" }), {
+      toolCall: {
+        type: "function_call",
+        callId: "call-read",
+        name: "read_file",
+        arguments: JSON.stringify({ path: "note.txt" }),
+      },
+    });
+    const envelope = JSON.parse(output as string);
+
+    expect(envelope.ok).toBe(true);
+    expect(envelope.summary).toContain("Read");
+    expect(envelope.data.content).toBe("hello from agents\n");
+    expect(events).toEqual(["start:read_file:call-read", "finish:read_file:call-read:true"]);
   });
 });
 

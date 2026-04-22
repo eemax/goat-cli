@@ -9,6 +9,8 @@ describe("parseArgv", () => {
     expect(parseArgv(["agents"])).toEqual({ kind: "agents" });
     expect(parseArgv(["roles"])).toEqual({ kind: "roles" });
     expect(parseArgv(["prompts"])).toEqual({ kind: "prompts" });
+    expect(parseArgv(["skills"])).toEqual({ kind: "skills" });
+    expect(parseArgv(["scenarios"])).toEqual({ kind: "scenarios" });
   });
 
   test("parses `goat new` run options", () => {
@@ -21,6 +23,10 @@ describe("parseArgv", () => {
         "auditor",
         "--prompt",
         "repo-summary",
+        "--skill",
+        "research",
+        "--skill",
+        "review",
         "--model",
         "gpt-5.4-mini",
         "--effort",
@@ -45,6 +51,9 @@ describe("parseArgv", () => {
         role: "auditor",
         noRole: false,
         prompt: "repo-summary",
+        skills: ["research", "review"],
+        compact: false,
+        scenario: null,
         model: "gpt-5.4-mini",
         effort: "medium",
         timeoutSeconds: 123,
@@ -69,6 +78,9 @@ describe("parseArgv", () => {
         role: null,
         noRole: false,
         prompt: null,
+        skills: [],
+        compact: false,
+        scenario: null,
         model: null,
         effort: null,
         timeoutSeconds: null,
@@ -93,6 +105,9 @@ describe("parseArgv", () => {
         role: null,
         noRole: true,
         prompt: null,
+        skills: [],
+        compact: false,
+        scenario: null,
         model: null,
         effort: null,
         timeoutSeconds: null,
@@ -117,6 +132,9 @@ describe("parseArgv", () => {
         role: null,
         noRole: false,
         prompt: null,
+        skills: [],
+        compact: false,
+        scenario: null,
         model: null,
         effort: null,
         timeoutSeconds: null,
@@ -143,6 +161,34 @@ describe("parseArgv", () => {
       session: "last",
       runId: "rid",
     });
+    expect(parseArgv(["compact", "session", "last"])).toEqual({ kind: "compact.session", session: "last" });
+  });
+
+  test("parses scenario and compact run options", () => {
+    expect(parseArgv(["new", "--scenario", "review-chain", "--compact", "inspect"])).toEqual({
+      kind: "run",
+      name: "new",
+      session: "new",
+      message: "inspect",
+      options: {
+        fork: false,
+        agent: null,
+        role: null,
+        noRole: false,
+        prompt: null,
+        skills: [],
+        compact: true,
+        scenario: "review-chain",
+        model: null,
+        effort: null,
+        timeoutSeconds: null,
+        plan: false,
+        cwd: null,
+        verbose: false,
+        debug: false,
+        debugJson: false,
+      },
+    });
   });
 
   test("rejects invalid combinations", () => {
@@ -151,8 +197,18 @@ describe("parseArgv", () => {
     const conflictingRole = () => parseArgv(["new", "--role", "auditor", "--no-role", "nope"]);
     const missingMessage = () => parseArgv(["new", "--plan"]);
     const conflictingDebug = () => parseArgv(["new", "--debug-json", "--verbose", "nope"]);
+    const scenarioConflict = () => parseArgv(["new", "--scenario", "chain", "--agent", "coder", "nope"]);
+    const scenarioExistingSession = () => parseArgv(["last", "--scenario", "chain", "nope"]);
 
-    for (const candidate of [forkNew, forkExplicitNew, conflictingRole, missingMessage, conflictingDebug]) {
+    for (const candidate of [
+      forkNew,
+      forkExplicitNew,
+      conflictingRole,
+      missingMessage,
+      conflictingDebug,
+      scenarioConflict,
+      scenarioExistingSession,
+    ]) {
       expect(candidate).toThrow(GoatError);
     }
   });
