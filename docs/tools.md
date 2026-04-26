@@ -204,36 +204,41 @@ Search text files using `rg --json`.
 - Clips oversized outputs, reports partial results
 - Access class: **read_only**
 
-## Stub tools (V1)
+## Web tools
 
-These tools have real IDs, schemas, and config sections but return structured
-`UNIMPLEMENTED_IN_V1` failure envelopes when invoked. They are reserved so
-agent definitions, doctor checks, and the provider tool payload can be
-stabilized now and back-filled with real implementations later without
-breaking sessions that already enable them.
+These tools have real IDs, schemas, and config sections and are exposed only
+when an agent enables them.
 
-| Tool | Future backing | Access class |
+| Tool | Backing | Access class |
 |------|---------------|--------------|
 | `web_search` | Exa | read_only |
-| `web_fetch` | Defuddle + curl fallback | read_only |
-| `subagents` | External subagents CLI | mutating |
+| `web_fetch` | Defuddle CLI | read_only |
 
-### `web_search` (stub)
+### `web_search`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string | yes | Search query string |
-| `type` | string | no | Search profile / strategy hint |
 | `num_results` | integer | no | Positive integer upper bound |
 | `published_within_days` | integer | no | Positive integer recency window |
 | `include_domains` | string[] | no | Allowlist of hostnames |
 | `exclude_domains` | string[] | no | Denylist of hostnames |
 
-### `web_fetch` (stub)
+The Exa search mode is controlled by `[tools.web_search].type`, not exposed to the model.
+
+### `web_fetch`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `url` | string (URL) | yes | Absolute URL to fetch |
+
+Uses `defuddle parse <url> --md` and returns extracted markdown. Private-network targets are blocked when `[tools.web_fetch].block_private_hosts` is true.
+
+## Stub tools (V1)
+
+| Tool | Future backing | Access class |
+|------|---------------|--------------|
+| `subagents` | External subagents CLI | mutating |
 
 ### `subagents` (stub)
 
@@ -241,7 +246,7 @@ breaking sessions that already enable them.
 |-----------|------|----------|-------------|
 | `action` | string | yes | Subagent dispatch action identifier |
 
-All three return:
+Stub tools return:
 
 ```json
 {

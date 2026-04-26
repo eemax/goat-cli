@@ -71,6 +71,8 @@ const rawConfigSchema = z
             enabled: z.boolean().optional(),
             api_key: z.string().min(1).optional(),
             api_key_env: z.string().min(1).optional(),
+            base_url: z.string().url().optional(),
+            type: z.enum(["auto", "neural", "deep"]).optional(),
           })
           .strict()
           .optional(),
@@ -78,7 +80,8 @@ const rawConfigSchema = z
           .object({
             enabled: z.boolean().optional(),
             block_private_hosts: z.boolean().optional(),
-            defuddle_base_url: z.string().url().optional(),
+            command: z.string().min(1).optional(),
+            timeout: timeSchema.optional(),
           })
           .strict()
           .optional(),
@@ -227,11 +230,14 @@ function normalizeGlobalConfig(raw: RawConfig, defaultRoot: string): GlobalConfi
         enabled: raw.tools?.web_search?.enabled ?? false,
         api_key: raw.tools?.web_search?.api_key ?? null,
         api_key_env: raw.tools?.web_search?.api_key_env ?? "EXA_API_KEY",
+        base_url: raw.tools?.web_search?.base_url ?? "https://api.exa.ai",
+        type: raw.tools?.web_search?.type ?? "auto",
       },
       web_fetch: {
         enabled: raw.tools?.web_fetch?.enabled ?? false,
         block_private_hosts: raw.tools?.web_fetch?.block_private_hosts ?? true,
-        defuddle_base_url: raw.tools?.web_fetch?.defuddle_base_url ?? null,
+        command: raw.tools?.web_fetch?.command ?? "defuddle",
+        timeout: raw.tools?.web_fetch?.timeout ?? 45,
       },
       subagents: {
         enabled: raw.tools?.subagents?.enabled ?? false,

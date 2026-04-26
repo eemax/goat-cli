@@ -338,11 +338,14 @@ export type GlobalConfig = {
       enabled: boolean;
       api_key: string | null;
       api_key_env: string;
+      base_url: string;
+      type: "auto" | "neural" | "deep";
     };
     web_fetch: {
       enabled: boolean;
       block_private_hosts: boolean;
-      defuddle_base_url: string | null;
+      command: string;
+      timeout: number;
     };
     subagents: {
       enabled: boolean;

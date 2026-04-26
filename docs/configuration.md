@@ -115,15 +115,20 @@ When `model` is unset, compaction uses the default agent's model. Effort and out
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `enabled` | bool | `false` | Enable web search (stub in V1) |
+| `enabled` | bool | `false` | Enable Exa-backed web search |
+| `api_key` | string | unset | Exa API key |
 | `api_key_env` | string | `EXA_API_KEY` | Exa API key env var |
+| `base_url` | string | `https://api.exa.ai` | Exa API base URL |
+| `type` | enum | `auto` | Exa search mode: `auto`, `neural`, or `deep` |
 
 ### `[tools.web_fetch]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `enabled` | bool | `false` | Enable web fetch (stub in V1) |
+| `enabled` | bool | `false` | Enable Defuddle CLI web fetch |
 | `block_private_hosts` | bool | `true` | Block private-network targets |
+| `command` | string | `defuddle` | Defuddle CLI command |
+| `timeout` | duration | `45s` | Defuddle command timeout |
 
 ### `[tools.subagents]`
 

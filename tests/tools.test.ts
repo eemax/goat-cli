@@ -1,19 +1,55 @@
 import { describe, expect, test } from "bun:test";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 
 import { executeToolCall, exportProviderTools, runProcess } from "../src/harness.js";
-import { createToolContextFixture, useCleanup } from "./helpers.js";
+import type { GlobalConfig } from "../src/types.js";
+import { createToolContextFixture, testToolsConfig, useCleanup } from "./helpers.js";
 
 const { track } = useCleanup();
 
-async function createContext(planMode = false, catastrophicOutputLimit?: number) {
+async function createContext(planMode = false, catastrophicOutputLimit?: number, config?: GlobalConfig["tools"]) {
   return createToolContextFixture({
     planMode,
     tempPrefix: "goat-run-",
     track,
     catastrophicOutputLimit,
+    config,
   });
+}
+
+async function withJsonServer(
+  handler: (request: {
+    method?: string;
+    url?: string;
+    headers: Record<string, string | string[] | undefined>;
+    body: string;
+  }) => unknown,
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    request.on("end", () => {
+      const result = handler({
+        method: request.method,
+        url: request.url,
+        headers: request.headers,
+        body: Buffer.concat(chunks).toString("utf8"),
+      });
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(result));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
+  };
 }
 
 describe("tool registry", () => {
@@ -85,6 +121,153 @@ describe("search tools", () => {
     });
     expect(grepResult.ok).toBe(true);
     expect(grepResult.ok && Array.isArray(grepResult.data?.matches)).toBe(true);
+  });
+
+  test("web_search posts the configured Exa shape and returns compact results", async () => {
+    const captured: Array<{
+      method?: string;
+      url?: string;
+      headers: Record<string, string | string[] | undefined>;
+      body: string;
+    }> = [];
+    const server = await withJsonServer((request) => {
+      captured.push(request);
+      return {
+        searchType: "neural",
+        results: [
+          {
+            url: "https://example.com/post",
+            title: " Example   Post ",
+            publishedDate: "2026-04-01",
+            score: 0.92,
+            highlights: [" First   highlight ", ""],
+          },
+        ],
+      };
+    });
+    try {
+      const context = await createContext(false, undefined, {
+        ...testToolsConfig,
+        web_search: {
+          ...testToolsConfig.web_search,
+          api_key: "test-exa-key",
+          base_url: server.baseUrl,
+          type: "neural",
+        },
+        max_output_chars: 10_000,
+      });
+      const result = await executeToolCall(context, ["web_search"], "web_search", {
+        query: " rust async runtimes ",
+        num_results: 3,
+        published_within_days: 30,
+        include_domains: ["Example.com", "example.com"],
+      });
+
+      expect(result.ok).toBe(true);
+      expect(captured[0]?.method).toBe("POST");
+      expect(captured[0]?.url).toBe("/search");
+      expect(captured[0]?.headers["x-api-key"]).toBe("test-exa-key");
+      const body = JSON.parse(captured[0]?.body ?? "{}");
+      expect(body).toMatchObject({
+        query: "rust async runtimes",
+        type: "neural",
+        numResults: 3,
+        includeDomains: ["example.com"],
+        contents: { highlights: {} },
+      });
+      expect(typeof body.startPublishedDate).toBe("string");
+      expect(result.ok && result.data?.type).toBe("neural");
+      expect(result.ok && result.data?.result_count).toBe(1);
+      const results = result.ok ? (result.data?.results as Array<Record<string, unknown>>) : [];
+      expect(results[0]).toMatchObject({
+        url: "https://example.com/post",
+        title: "Example Post",
+        published_date: "2026-04-01",
+        score: 0.92,
+        highlights: ["First highlight"],
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("web_search hides Exa mode from the model-facing schema", () => {
+    const [tool] = exportProviderTools(["web_search"]);
+    const parameters = tool?.parameters as { properties?: Record<string, unknown> };
+    expect(parameters.properties).not.toHaveProperty("type");
+  });
+
+  test("web_search validates credentials and domain overlap", async () => {
+    const context = await createContext(false, undefined, {
+      ...testToolsConfig,
+      web_search: {
+        ...testToolsConfig.web_search,
+        api_key_env: "GOAT_TEST_MISSING_EXA_API_KEY",
+      },
+    });
+    const missingKey = await executeToolCall(context, ["web_search"], "web_search", {
+      query: "hello",
+    });
+    expect(missingKey.ok).toBe(false);
+    expect(missingKey.ok ? null : missingKey.error.message).toContain("missing Exa API key");
+
+    const overlapContext = await createContext(false, undefined, {
+      ...testToolsConfig,
+      web_search: {
+        ...testToolsConfig.web_search,
+        api_key: "test-exa-key",
+      },
+    });
+    const overlap = await executeToolCall(overlapContext, ["web_search"], "web_search", {
+      query: "hello",
+      include_domains: ["example.com"],
+      exclude_domains: ["EXAMPLE.com"],
+    });
+    expect(overlap.ok).toBe(false);
+    expect(overlap.ok ? null : overlap.error.message).toContain("overlap");
+  });
+});
+
+describe("web fetch tool", () => {
+  test("web_fetch invokes the configured defuddle CLI and returns markdown", async () => {
+    const binDir = join((await createContext()).runRoot, "bin");
+    await mkdir(binDir, { recursive: true });
+    const defuddle = join(binDir, "defuddle");
+    await writeFile(defuddle, '#!/bin/sh\nprintf \'# Title\\n\\nFetched %s with %s\\n\' "$2" "$3"\n');
+    await chmod(defuddle, 0o755);
+    const context = await createContext(false, undefined, {
+      ...testToolsConfig,
+      web_fetch: {
+        ...testToolsConfig.web_fetch,
+        block_private_hosts: false,
+        command: defuddle,
+      },
+    });
+
+    const result = await executeToolCall(context, ["web_fetch"], "web_fetch", {
+      url: "https://example.com/docs",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.data?.mode).toBe("defuddle");
+    expect(result.ok && result.data?.content).toBe("# Title\n\nFetched https://example.com/docs with --md");
+  });
+
+  test("web_fetch blocks private hosts before running defuddle", async () => {
+    const context = await createContext(false, undefined, {
+      ...testToolsConfig,
+      web_fetch: {
+        ...testToolsConfig.web_fetch,
+        command: "/bin/false",
+      },
+    });
+
+    const result = await executeToolCall(context, ["web_fetch"], "web_fetch", {
+      url: "http://127.0.0.1/secret",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? null : result.error.message).toContain("private host");
   });
 });
 
@@ -334,10 +517,10 @@ describe("patch and stub tools", () => {
     expect(result.ok ? null : result.error.message).toContain("at least one hunk");
   });
 
-  test("returns explicit unimplemented failures for stub tools", async () => {
+  test("returns explicit unimplemented failures for remaining stub tools", async () => {
     const context = await createContext();
-    const result = await executeToolCall(context, ["web_search"], "web_search", {
-      query: "hello",
+    const result = await executeToolCall(context, ["subagents"], "subagents", {
+      action: "spawn",
     });
     expect(result.ok).toBe(false);
     expect(result.ok ? null : result.error.code).toBe("UNIMPLEMENTED_IN_V1");

@@ -11,7 +11,7 @@ import {
   resolveToolPath,
   toRelativeDisplayPath,
 } from "../src/harness.js";
-import { createToolContextFixture, useCleanup } from "./helpers.js";
+import { createToolContextFixture, testToolsConfig, useCleanup } from "./helpers.js";
 
 const { track } = useCleanup();
 
@@ -155,16 +155,23 @@ describe("executeToolCall", () => {
     expect(result.ok ? null : result.error.code).toBe("TOOL_FAILURE");
   });
 
-  test("surfaces stub tools as UNIMPLEMENTED_IN_V1 without touching the mutation lock", async () => {
+  test("keeps read-only web_search from touching the mutation lock", async () => {
     const tracker = { count: 0 };
     const context = await createToolContextFixture({
       tempPrefix: "goat-harness-",
       track,
       mutationLockTracker: tracker,
+      config: {
+        ...testToolsConfig,
+        web_search: {
+          ...testToolsConfig.web_search,
+          api_key_env: "GOAT_TEST_MISSING_EXA_API_KEY",
+        },
+      },
     });
     const result = await executeToolCall(context, ["web_search"], "web_search", { query: "hi" });
     expect(result.ok).toBe(false);
-    expect(result.ok ? null : result.error.code).toBe("UNIMPLEMENTED_IN_V1");
+    expect(result.ok ? null : result.error.message).toContain("missing Exa API key");
     // web_search is read-only, so no lock.
     expect(tracker.count).toBe(0);
   });

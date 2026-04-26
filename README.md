@@ -117,7 +117,7 @@ V1 ships with seven implemented tools:
 | `glob` | read-only | File pattern matching via `rg` |
 | `grep` | read-only | Regex/literal search via `rg` |
 
-Three additional tools (`web_search`, `web_fetch`, `subagents`) are defined as stubs for future implementation.
+`web_search` uses Exa, `web_fetch` uses the Defuddle CLI, and `subagents` is defined as a stub for future implementation.
 
 See [docs/tools.md](docs/tools.md) for full schemas and behavior.
 

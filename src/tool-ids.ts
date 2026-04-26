@@ -8,9 +8,11 @@ const IMPLEMENTED_TOOL_IDS = [
   "grep",
 ] as const;
 
-const STUB_TOOL_IDS = ["web_search", "web_fetch", "subagents"] as const;
+const STUB_TOOL_IDS = ["subagents"] as const;
 
-export const ALL_TOOL_IDS = [...IMPLEMENTED_TOOL_IDS, ...STUB_TOOL_IDS] as const;
+const WEB_TOOL_IDS = ["web_search", "web_fetch"] as const;
+
+export const ALL_TOOL_IDS = [...IMPLEMENTED_TOOL_IDS, ...WEB_TOOL_IDS, ...STUB_TOOL_IDS] as const;
 
 export type ToolId = (typeof ALL_TOOL_IDS)[number];
 

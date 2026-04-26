@@ -165,11 +165,11 @@ export async function runDoctor(
   }
 
   if (config.tools.web_fetch.enabled) {
-    const hasCurl = await commandExists("curl");
+    const hasDefuddle = await commandExists(config.tools.web_fetch.command);
     checks.push({
-      name: "web_fetch_curl",
-      status: hasCurl ? "PASS" : "FAIL",
-      reason: hasCurl ? undefined : "curl not found in PATH",
+      name: "web_fetch_defuddle",
+      status: hasDefuddle ? "PASS" : "FAIL",
+      reason: hasDefuddle ? undefined : `${config.tools.web_fetch.command} not found in PATH`,
     });
   }
 

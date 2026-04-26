@@ -29,10 +29,14 @@ max_file_size = "1mb"
 [tools.web_search]
 enabled = false
 api_key_env = "EXA_API_KEY"
+base_url = "https://api.exa.ai"
+type = "auto"
 
 [tools.web_fetch]
 enabled = false
 block_private_hosts = true
+command = "defuddle"
+timeout = "45s"
 
 [tools.subagents]
 enabled = false

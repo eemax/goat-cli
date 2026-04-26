@@ -11,6 +11,7 @@ import { runBashTool } from "./tools-bash.js";
 import { runReadFileTool, runReplaceInFileTool, runWriteFileTool } from "./tools-files.js";
 import { applyStructuredPatch } from "./tools-patch.js";
 import { runGlobTool, runGrepTool } from "./tools-search.js";
+import { runWebFetchTool, runWebSearchTool } from "./tools-web.js";
 import type { GlobalConfig, ProviderTool, ToolAccessClass, ToolEnvelope } from "./types.js";
 import { isErrnoException } from "./utils.js";
 
@@ -161,30 +162,31 @@ const toolDefinitions: ToolDefinition[] = [
   }),
   defineTool({
     id: "web_search",
-    description: "Stubbed web search tool reserved for future Exa integration.",
+    description:
+      "Search the web for relevant sources with Exa. Use this first when you need current or external information, then use web_fetch for deeper reading. Cite exact URLs you use in the final answer.",
     access: "read_only",
     schema: z
       .object({
         query: z.string().min(1),
-        type: z.string().optional(),
-        num_results: z.number().int().positive().optional(),
-        published_within_days: z.number().int().positive().optional(),
+        num_results: z.number().int().min(1).max(20).optional(),
+        published_within_days: z.number().int().min(1).max(365).optional(),
         include_domains: z.array(z.string()).optional(),
         exclude_domains: z.array(z.string()).optional(),
       })
       .strict(),
-    handler: async () => unimplementedTool("web_search"),
+    handler: (context, input) => runWebSearchTool(context, input),
   }),
   defineTool({
     id: "web_fetch",
-    description: "Stubbed web fetch tool reserved for future Defuddle integration.",
+    description:
+      "Fetch a single URL with Defuddle markdown extraction. Use this after web_search when you need live verification or deeper reading from a specific page. Cite the exact URL you fetched in the final answer.",
     access: "read_only",
     schema: z
       .object({
         url: z.string().url(),
       })
       .strict(),
-    handler: async () => unimplementedTool("web_fetch"),
+    handler: (context, input) => runWebFetchTool(context, input),
   }),
   defineTool({
     id: "subagents",
@@ -432,6 +434,7 @@ export type ProcessResult = {
   stdout: string;
   stderr: string;
   outputLimitExceeded: boolean;
+  timedOut: boolean;
 };
 
 function terminateChildProcess(child: ReturnType<typeof spawn>, detached = false): void {
@@ -474,6 +477,7 @@ export async function runProcess(
     detached?: boolean;
     abortSignal?: AbortSignal;
     maxOutputBytes?: number;
+    timeoutMs?: number;
   },
 ): Promise<ProcessResult> {
   return await new Promise((resolveResult, reject) => {
@@ -490,6 +494,7 @@ export async function runProcess(
     let outputBytes = 0;
     let outputLimitExceeded = false;
     let terminationRequested = false;
+    let timedOut = false;
 
     const requestTermination = () => {
       if (terminationRequested) {
@@ -498,6 +503,14 @@ export async function runProcess(
       terminationRequested = true;
       terminateChildProcess(child, options.detached);
     };
+    const timeout =
+      options.timeoutMs === undefined
+        ? null
+        : setTimeout(() => {
+            timedOut = true;
+            requestTermination();
+          }, options.timeoutMs);
+    timeout?.unref();
 
     const appendChunk = (target: Buffer[], chunk: Buffer) => {
       if (outputLimitExceeded) {
@@ -534,13 +547,22 @@ export async function runProcess(
     child.stderr.on("data", (chunk: Buffer | string) => {
       appendChunk(stderrChunks, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      reject(error);
+    });
     child.on("close", (exitCode) => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
       resolveResult({
         exitCode: exitCode ?? 1,
         stdout: Buffer.concat(stdoutChunks).toString("utf8"),
         stderr: Buffer.concat(stderrChunks).toString("utf8"),
         outputLimitExceeded,
+        timedOut,
       });
     });
   });

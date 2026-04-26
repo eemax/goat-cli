@@ -32,11 +32,14 @@ export const testToolsConfig: GlobalConfig["tools"] = {
     enabled: false,
     api_key: null,
     api_key_env: "EXA_API_KEY",
+    base_url: "https://api.exa.ai",
+    type: "auto",
   },
   web_fetch: {
     enabled: false,
     block_private_hosts: true,
-    defuddle_base_url: null,
+    command: "defuddle",
+    timeout: 45,
   },
   subagents: {
     enabled: false,
