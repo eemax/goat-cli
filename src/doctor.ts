@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { access, mkdir, readFile } from "node:fs/promises";
 
 import { discoverRoots, loadGlobalConfig, resolveOpenAIApiKey } from "./config.js";
-import { loadDefinitions, loadModelCatalog, resolveModel } from "./defs.js";
+import { loadDefinitions, loadModelCatalog } from "./defs.js";
 import { ExitCode } from "./errors.js";
 import { formatError } from "./io.js";
 import type { CommandOutput, RuntimeDeps } from "./runtime-context.js";
@@ -82,25 +82,6 @@ export async function runDoctor(
     }
   } else {
     checks.push({ name: "definitions", status: "SKIP", reason: "model catalog did not load" });
-  }
-
-  if (config.compaction.model) {
-    if (models) {
-      try {
-        resolveModel(models, config.compaction.model);
-        checks.push({ name: "compaction_model", status: "PASS" });
-      } catch (error) {
-        checks.push({ name: "compaction_model", status: "FAIL", reason: formatError(error) });
-      }
-    } else {
-      checks.push({
-        name: "compaction_model",
-        status: "FAIL",
-        reason: "cannot verify compaction model without a valid model catalog",
-      });
-    }
-  } else {
-    checks.push({ name: "compaction_model", status: "SKIP", reason: "not configured" });
   }
 
   if (config.compaction.prompt_file) {

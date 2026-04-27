@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { Readable } from "node:stream";
 
-import { compactSessionHistory, maybeCompactReplay } from "./compaction.js";
+import { compactSessionHistory } from "./compaction.js";
 import { exists, resolveOpenAIApiKey } from "./config.js";
 import type { DebugSink } from "./debug.js";
 import { summarizePromptMessages } from "./debug.js";
@@ -16,21 +16,10 @@ import {
   ensureSessionCanRun,
   forkSession,
   lastActiveSession,
-  loadCompactionState,
   loadSessionMeta,
   readMessages,
 } from "./session.js";
-import type {
-  AgentDef,
-  Command,
-  CompactionState,
-  Effort,
-  MessageRecord,
-  PromptDef,
-  RoleDef,
-  SessionMeta,
-  SkillDef,
-} from "./types.js";
+import type { AgentDef, Command, Effort, MessageRecord, PromptDef, RoleDef, SessionMeta, SkillDef } from "./types.js";
 import { isErrnoException } from "./utils.js";
 
 type RunCommand = Extract<Command, { kind: "run" }>;
@@ -49,9 +38,9 @@ export type PreparedRun = {
   effectiveCwd: string;
   timeoutSeconds: number;
   stdinText: string | null;
-  retainedMessages: MessageRecord[];
-  pendingCompactionState: CompactionState | null;
+  sessionMessages: MessageRecord[];
   promptAssembly: PromptAssembly;
+  contextWarning: string | null;
   apiKey: string;
 };
 
@@ -100,10 +89,6 @@ function determineEffectiveCwd(command: RunCommand, sessionMeta: SessionMeta, pr
   return resolve(command.options.cwd ?? sessionMeta.cwd ?? processCwd);
 }
 
-function compactBudgetTokens(compactAtTokens: number): number {
-  return Math.floor(compactAtTokens * 0.9);
-}
-
 async function ensureExistingDirectory(path: string): Promise<void> {
   try {
     const info = await stat(path);
@@ -130,6 +115,22 @@ async function ensureExistingDirectory(path: string): Promise<void> {
 
 function isApproachingLimit(estimate: number, limit: number | null): boolean {
   return limit !== null && estimate >= Math.floor(limit * 0.8);
+}
+
+function buildContextWarning(params: {
+  estimate: number;
+  compactAtTokens: number;
+  contextWindow: number | null;
+  sessionId: string;
+}): string | null {
+  const warningThreshold = Math.floor(params.compactAtTokens * 0.8);
+  if (params.estimate < warningThreshold) {
+    return null;
+  }
+
+  const contextText = params.contextWindow === null ? "" : `; model context window is ${params.contextWindow}`;
+  const level = params.estimate >= params.compactAtTokens ? "exceeds" : "is nearing";
+  return `warning: assembled prompt estimate ${params.estimate} ${level} compact_at_tokens ${params.compactAtTokens}${contextText}. Run \`goat compact session ${params.sessionId}\` soon.\n`;
 }
 
 async function resolveRunSession(context: AppContext, command: RunCommand): Promise<RunSessionResolution> {
@@ -245,6 +246,10 @@ export async function prepareRunExecution(
   const effort = resolveEffectiveEffort(sessionMeta, agent, command);
   const effectiveCwd = determineEffectiveCwd(command, sessionMeta, processCwd);
   await ensureExistingDirectory(effectiveCwd);
+  const apiKey = await resolveOpenAIApiKey(context.config, env);
+  if (!apiKey) {
+    throw configError("OpenAI API key is not configured");
+  }
 
   if (command.options.compact) {
     const result = await compactSessionHistory({
@@ -252,8 +257,12 @@ export async function prepareRunExecution(
       sessionMeta,
       agent,
       modelId,
+      providerModel,
+      effort,
       cwd: effectiveCwd,
-      reason: "Manual compaction before prompt run.",
+      apiKey,
+      deps,
+      debug,
     });
     await debug?.emit("compaction", "manual", {
       trigger: "flag",
@@ -261,7 +270,6 @@ export async function prepareRunExecution(
       changed: result.changed,
       original_session_messages: result.originalMessages,
       retained_session_messages: result.retainedMessages,
-      compaction_count: result.compactionCount,
     });
     if (result.changed) {
       sessionMeta = await loadSessionMeta(context.config.paths.sessions_dir, sessionMeta.session_id);
@@ -271,22 +279,23 @@ export async function prepareRunExecution(
   const timeoutSeconds = command.options.timeoutSeconds ?? agent.run_timeout ?? context.config.runtime.run_timeout;
   const stdinText = await readOptionalStdin(stdin, context.config.runtime.max_stdin);
   const sessionMessages = await readMessages(context.config.paths.sessions_dir, sessionMeta.session_id);
-  const currentCompaction = await loadCompactionState(context.config.paths.sessions_dir, sessionMeta.session_id);
 
-  let retainedMessages = sessionMessages;
-  let pendingCompactionState: CompactionState | null = null;
-  let promptAssembly = assemblePrompt({
+  const promptAssembly = assemblePrompt({
     agent,
     role,
     prompt,
     skills,
-    compaction: currentCompaction,
-    sessionMessages: retainedMessages,
+    sessionMessages,
     userMessage: command.message,
     stdinText,
   });
 
-  const effectiveCompactBudget = compactBudgetTokens(agent.compact_at_tokens);
+  const contextWarning = buildContextWarning({
+    estimate: promptAssembly.estimated_tokens,
+    compactAtTokens: agent.compact_at_tokens,
+    contextWindow: modelContextWindow,
+    sessionId: sessionMeta.session_id,
+  });
   await debug?.emit("session", "resolved", {
     selector: command.session,
     resolution: sessionResolution.mode,
@@ -316,73 +325,13 @@ export async function prepareRunExecution(
     input_items: promptAssembly.input.length,
     estimated_tokens: promptAssembly.estimated_tokens,
     compact_at_tokens: agent.compact_at_tokens,
-    compact_budget: effectiveCompactBudget,
     context_window: modelContextWindow,
     approaching_limit: isApproachingLimit(promptAssembly.estimated_tokens, modelContextWindow),
     instructions_chars: promptAssembly.instructions.length,
-    current_compaction_count: currentCompaction?.compaction_count ?? 0,
     input_preview: summarizePromptMessages(promptAssembly.input),
     stdin_attached: stdinText !== null,
+    warning: contextWarning !== null,
   });
-  if (promptAssembly.estimated_tokens > effectiveCompactBudget) {
-    const beforeEstimate = promptAssembly.estimated_tokens;
-    const beforeMessageCount = promptAssembly.input.length;
-    const compacted = maybeCompactReplay({
-      compactionConfig: context.config.compaction,
-      sessionMeta,
-      sessionMessages,
-      currentMessage: command.message,
-      stdinText,
-      compactAtTokens: agent.compact_at_tokens,
-      currentCompaction,
-    });
-    retainedMessages = compacted.retainedMessages;
-    pendingCompactionState = compacted.compactionState;
-    promptAssembly = assemblePrompt({
-      agent,
-      role,
-      prompt,
-      skills,
-      compaction: pendingCompactionState ?? currentCompaction,
-      sessionMessages: retainedMessages,
-      userMessage: command.message,
-      stdinText,
-    });
-    await debug?.emit("compaction", "performed", {
-      trigger: "pre_send_budget",
-      before_estimated_tokens: beforeEstimate,
-      after_estimated_tokens: promptAssembly.estimated_tokens,
-      before_input_items: beforeMessageCount,
-      after_input_items: promptAssembly.input.length,
-      original_session_messages: sessionMessages.length,
-      retained_session_messages: retainedMessages.length,
-      dropped_session_messages: sessionMessages.length - retainedMessages.length,
-      compaction_count: pendingCompactionState?.compaction_count ?? currentCompaction?.compaction_count ?? 0,
-      raw_history_budget_pct: context.config.compaction.raw_history_budget_pct,
-    });
-    await debug?.emit("context", "assembled", {
-      compacted: true,
-      session_messages: retainedMessages.length,
-      input_items: promptAssembly.input.length,
-      estimated_tokens: promptAssembly.estimated_tokens,
-      compact_at_tokens: agent.compact_at_tokens,
-      compact_budget: effectiveCompactBudget,
-      context_window: modelContextWindow,
-      approaching_limit: isApproachingLimit(promptAssembly.estimated_tokens, modelContextWindow),
-      instructions_chars: promptAssembly.instructions.length,
-      current_compaction_count: (pendingCompactionState ?? currentCompaction)?.compaction_count ?? 0,
-      input_preview: summarizePromptMessages(promptAssembly.input),
-      stdin_attached: stdinText !== null,
-    });
-    if (promptAssembly.estimated_tokens > effectiveCompactBudget) {
-      throw usageError(`assembled prompt exceeded compact_at_tokens (${agent.compact_at_tokens}) after compaction`);
-    }
-  }
-
-  const apiKey = await resolveOpenAIApiKey(context.config, env);
-  if (!apiKey) {
-    throw configError("OpenAI API key is not configured");
-  }
 
   return {
     context,
@@ -398,9 +347,9 @@ export async function prepareRunExecution(
     effectiveCwd,
     timeoutSeconds,
     stdinText,
-    retainedMessages,
-    pendingCompactionState,
+    sessionMessages,
     promptAssembly,
+    contextWarning,
     apiKey,
   };
 }

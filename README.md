@@ -32,7 +32,7 @@ Once installed globally (`bun link` or added to `$PATH`), replace `bun run src/m
 - **Durable sessions** -- every run is persisted to disk with full transcripts, provider metadata, and terminal summaries. Crashes, interrupts, and upgrades leave inspectable state behind.
 - **Local tool harness** -- bash, file I/O, search (grep/glob via `rg`), and a structured patch tool. All tools return normalized JSON envelopes.
 - **Session-first model** -- sessions carry sticky settings (agent, role, model, effort, cwd). Fork, stop, and resume without a background service.
-- **Custom compaction** -- runtime-owned context management keeps long sessions within model limits, with explicit maintenance runs when requested.
+- **Manual compaction** -- long sessions warn near their configured context budget; explicit compaction asks the same session for a structured JSON checkpoint and rewrites replay history.
 - **Skills and scenarios** -- agents can expose one-shot skills, and scenario chains can run multi-agent workflows in fresh sessions.
 - **Scriptable** -- stdout is reserved for command results. Progress, diagnostics, and errors use stderr. Exit codes are stable and documented.
 
@@ -45,7 +45,7 @@ goat --session <id> [options] "msg"  # Target a specific session
 
 goat sessions new|last|list|show|fork|stop
 goat runs list|show
-goat compact session <id|last>          # Run deterministic compaction
+goat compact session <id|last>          # Ask the session to compact itself
 
 goat agents                          # List agent definitions
 goat roles                           # List role definitions
@@ -126,8 +126,7 @@ See [docs/tools.md](docs/tools.md) for full schemas and behavior.
 Sessions live under `<highest-priority-config-root>/sessions/` by default. Each session contains:
 
 - `meta.json` -- sticky settings, revision, usage
-- `messages.jsonl` -- compact replay history
-- `compaction.json` -- structured session summary
+- `messages.jsonl` -- replay history, rewritten to a compact checkpoint after manual compaction
 - `runs/<run-id>/` -- per-run transcript, provider metadata, summary, and artifacts
 
 See [docs/persistence.md](docs/persistence.md) for record shapes and semantics.

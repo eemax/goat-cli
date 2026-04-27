@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { SessionStore } from "../src/session-store.js";
-import type { CompactionState, MessageRecord } from "../src/types.js";
+import type { MessageRecord } from "../src/types.js";
 import { createTempDir, useCleanup } from "./helpers.js";
 
 const { track } = useCleanup();
@@ -78,24 +78,6 @@ describe("SessionStore", () => {
     expect(reloaded[1]?.content).toBe("hi");
   });
 
-  test("compaction state round-trip", async () => {
-    const store = await makeStore();
-    const meta = await store.createSession();
-    const compaction: CompactionState = {
-      v: 1,
-      updated_at: new Date().toISOString(),
-      source_revision: 3,
-      compaction_count: 1,
-      raw_history_budget_pct: 0.2,
-      retained_raw_token_estimate: 1024,
-      summary: { current_objective: "finish the audit" },
-    };
-    await store.writeCompactionState(meta.session_id, compaction);
-    const loaded = await store.loadCompactionState(meta.session_id);
-    expect(loaded?.source_revision).toBe(3);
-    expect(loaded?.summary.current_objective).toBe("finish the audit");
-  });
-
   test("createRunDirectory mkdir-p's the artifacts subdir", async () => {
     const store = await makeStore();
     const meta = await store.createSession();
@@ -106,7 +88,7 @@ describe("SessionStore", () => {
     expect(ids).toContain("run-abc");
   });
 
-  test("fork copies messages and compaction state but creates a fresh id", async () => {
+  test("fork copies messages but creates a fresh id", async () => {
     const store = await makeStore();
     const source = await store.createSession();
     await store.appendMessages(source.session_id, [

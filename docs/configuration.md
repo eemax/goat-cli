@@ -89,11 +89,9 @@ written with `status = "timed_out"`, and the CLI exits with code 10
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `model` | string | -- | Model for compaction runs (falls back to `defaults.agent` model) |
-| `raw_history_budget_pct` | float | `0.20` | Max fraction of durable raw history after compaction |
 | `prompt_file` | string | -- | Override for built-in compaction prompt |
 
-When `model` is unset, compaction uses the default agent's model. Effort and output limits are taken from the model's registry entry. `prompt_file` resolves relative to the `goat.toml` that defines it.
+Compaction is a normal provider-backed turn inside the target session. It uses the session's resolved agent, model, effort, and output limits. `prompt_file` resolves relative to the `goat.toml` that defines it.
 
 ### `[artifacts]`
 
@@ -195,7 +193,7 @@ path = "../skills"
 | `description` | string | no | Human-readable description |
 | `default_effort` | enum | no | Default reasoning effort |
 | `max_output_tokens` | tokens | no | Output token cap (default: 12k) |
-| `compact_at_tokens` | tokens | no | Compaction budget (default: 180k) |
+| `compact_at_tokens` | tokens | no | Warning threshold for manual compaction (default: 180k) |
 | `run_timeout` | duration | no | Inherits from `runtime.run_timeout` |
 | `[skills].enabled` | bool | no | Enables skills for this agent. Missing means disabled. |
 | `[skills].path` | string | when enabled | Folder containing skill subfolders with `SKILL.md`. Resolves relative to the agent file. |

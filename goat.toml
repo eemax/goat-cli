@@ -13,9 +13,6 @@ max_stdin = "8mb"
 run_timeout = "2h"
 stderr_message_max_chars = "2k"
 
-[compaction]
-raw_history_budget_pct = 0.20
-
 [artifacts]
 preview_limit = "50kb"
 catastrophic_output_limit = "16mb"
@@ -27,13 +24,13 @@ max_output_chars = "200k"
 max_file_size = "1mb"
 
 [tools.web_search]
-enabled = false
+enabled = true
 api_key_env = "EXA_API_KEY"
 base_url = "https://api.exa.ai"
 type = "auto"
 
 [tools.web_fetch]
-enabled = false
+enabled = true
 block_private_hosts = true
 command = "defuddle"
 timeout = "45s"

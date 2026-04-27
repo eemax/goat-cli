@@ -14,8 +14,7 @@ Goat persists durable state to the local filesystem. The model separates:
 <sessions_dir>/                         Default: <highest-priority-config-root>/sessions/
   <session-id>/                         Lowercase ULID
     meta.json                           Sticky session state
-    compaction.json                     Structured session summary
-    messages.jsonl                      Compact replay history
+    messages.jsonl                      Replay history
     session.lock                        Metadata coordination lock
     execution.lock                      Mutating run serialization lock
     runs/
@@ -31,7 +30,7 @@ Goat persists durable state to the local filesystem. The model separates:
 - Session IDs and run IDs are lowercase ULIDs
 - JSON files are versioned with `v`
 - JSONL files are append-only event streams
-- Session replay history may be atomically rewritten during compaction
+- Session replay history is appended after prompt runs and atomically rewritten after manual compaction
 - JSON files use atomic write-then-rename
 - JSONL records append only complete lines
 - Durable commit boundaries fsync before reporting success
@@ -77,37 +76,9 @@ Stores sticky session state and coarse summary metadata.
 | `message_count` | Cached count from `messages.jsonl` |
 | `agent_name`, `role_name`, `model`, `effort`, `cwd` | Sticky session settings (nullable when `bound = false`) |
 
-## compaction.json
-
-Stores the current structured session summary produced by compaction.
-
-```json
-{
-  "v": 1,
-  "updated_at": "2026-04-09T08:09:30Z",
-  "source_revision": 12,
-  "compaction_count": 2,
-  "raw_history_budget_pct": 0.2,
-  "retained_raw_token_estimate": 23140,
-  "summary": {
-    "current_objective": "...",
-    "last_user_request": "...",
-    "user_preferences": ["..."],
-    "constraints": ["..."],
-    "decisions": ["..."],
-    "important_paths": ["..."],
-    "completed_work": ["..."],
-    "open_loops": ["..."],
-    "next_best_action": "..."
-  }
-}
-```
-
-The `summary` fields are guidance, not a frozen schema. Goat tolerates additive growth. When no compaction has happened, `compaction.json` may be absent.
-
 ## messages.jsonl
 
-Retained raw durable replay history. Contains only user messages and final assistant messages that survived the latest compaction or commit.
+Durable replay history. Prompt runs append user messages and final assistant messages. Manual compaction rewrites this file to the compaction prompt plus the assistant's normalized JSON checkpoint.
 
 Does **not** contain: intermediate tool-call turns, tool outputs, provider diagnostics, or failed run history.
 
@@ -130,7 +101,7 @@ Does **not** contain: intermediate tool-call turns, tool outputs, provider diagn
 |-------|-------------|
 | `kind` | Fixed to `message` in V1 |
 | `role` | `user` or `assistant` |
-| `source` | `cli_arg`, `stdin`, or `assistant_final` |
+| `source` | `cli_arg`, `stdin`, `assistant_final`, or `compaction_prompt` |
 | `run_id` | Links back to the run directory |
 | `prompt_name` | Optional one-turn prompt name |
 
@@ -146,7 +117,6 @@ The human- and machine-readable story of the run. Record kinds:
 |------|-------------|
 | `run_started` | Run metadata (session, agent, model, plan mode, cwd) |
 | `message` | Assistant messages (may include `tool_calls`) |
-| `compaction_checkpoint` | Mid-run compaction events |
 | `tool_call` | Tool invocation details |
 | `tool_result` | Tool output with duration, ok/error status, preview/artifact |
 | `run_finished` | Terminal status and termination reason |
@@ -214,7 +184,7 @@ Paths are relative to the run directory.
 
 ## Lock semantics
 
-**`session.lock`** coordinates updates to `meta.json`, `compaction.json`, `messages.jsonl`, and stop-state changes.
+**`session.lock`** coordinates updates to `meta.json`, `messages.jsonl`, and stop-state changes.
 
 **`execution.lock`** serializes mutating same-session runs. Session-scoped, not run-scoped.
 

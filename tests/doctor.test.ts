@@ -22,6 +22,15 @@ async function makeRepo(options?: { goatToml?: string; modelsToml?: string; agen
       `
 [defaults]
 agent = "coder"
+
+[tools.web_search]
+enabled = false
+
+[tools.web_fetch]
+enabled = false
+
+[tools.subagents]
+enabled = false
 `,
   );
   await writeFile(

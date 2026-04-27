@@ -1,5 +1,7 @@
 # Goat CLI Contract
 
+> Historical note: this planning document predates the simplified manual compaction model. Current CLI behavior is documented in `docs/cli.md`: `goat compact session` and `--compact` run explicit provider-backed compaction, while ordinary prompt runs only warn near the threshold.
+
 ## Overview
 
 `goat` is a non-interactive, session-first CLI for agent runs.

@@ -1,5 +1,7 @@
 # Goat CLI Architecture
 
+> Historical note: this planning document predates the simplified manual compaction model. Current compaction behavior is documented in `docs/architecture.md`: Goat warns near `compact_at_tokens`, never auto-compacts, and only rewrites replay after an explicit provider-backed `goat compact session` / `--compact` run that returns JSON.
+
 ## Overview
 
 `goat` is a session-first, non-interactive agent harness CLI.

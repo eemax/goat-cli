@@ -1,5 +1,7 @@
 # Goat Configuration
 
+> Historical note: this planning document predates the simplified manual compaction model. Current configuration is documented in `docs/configuration.md`: `[compaction]` only supports `prompt_file`, and `compact_at_tokens` is a warning threshold rather than an automatic compaction gate.
+
 ## Overview
 
 This document defines Goat's configuration surfaces for V1:

@@ -1,4 +1,4 @@
-Summarize the older durable session history into a compact structured checkpoint.
+Summarize this session into a compact structured checkpoint for future turns.
 
 Return JSON with these preferred fields when they are available:
 - current_objective
@@ -11,5 +11,7 @@ Return JSON with these preferred fields when they are available:
 - edits_made
 - open_loops
 - next_best_action
+
+Return only a single JSON object. Do not wrap it in Markdown.
 
 Be concise, factual, and preserve only information needed to continue the work well.

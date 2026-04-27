@@ -6,7 +6,7 @@ import { ArtifactStore } from "./artifacts.js";
 import { createDebugSink, type DebugSink, debugErrorData } from "./debug.js";
 import { ExitCode, GoatError, sessionConflictError, timeoutError } from "./errors.js";
 import { exportProviderTools, type ToolContext } from "./harness.js";
-import { formatError } from "./io.js";
+import { formatError, writeText } from "./io.js";
 import {
   appendJsonlRecord,
   buildReplayRecords,
@@ -221,11 +221,15 @@ export async function executeRunCommand(
     effectiveCwd,
     timeoutSeconds,
     stdinText,
-    retainedMessages,
-    pendingCompactionState,
+    sessionMessages,
     promptAssembly,
+    contextWarning,
     apiKey,
   } = prepared;
+
+  if (contextWarning) {
+    await writeText(stderr, contextWarning);
+  }
 
   const runId = newId();
   const runDir = await createRunDirectory(context.config.paths.sessions_dir, sessionMeta.session_id, runId);
@@ -334,8 +338,8 @@ export async function executeRunCommand(
       effectiveCwd,
       replayRecords,
       runUsage: loopResult.usage,
-      compactionState: pendingCompactionState,
-      retainedMessages,
+      rewriteReplay: false,
+      existingMessages: sessionMessages,
     });
 
     const summary = buildRunSummary(summaryInputs(), {

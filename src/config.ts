@@ -47,8 +47,6 @@ const rawConfigSchema = z
       .optional(),
     compaction: z
       .object({
-        model: z.string().min(1).optional(),
-        raw_history_budget_pct: z.number().min(0).max(1).optional(),
         prompt_file: z.string().min(1).optional(),
       })
       .strict()
@@ -213,8 +211,6 @@ function normalizeGlobalConfig(raw: RawConfig, defaultRoot: string): GlobalConfi
       stderr_message_max_chars: raw.runtime?.stderr_message_max_chars ?? 2000,
     },
     compaction: {
-      model: raw.compaction?.model ?? null,
-      raw_history_budget_pct: raw.compaction?.raw_history_budget_pct ?? 0.2,
       prompt_file: raw.compaction?.prompt_file ?? null,
     },
     artifacts: {

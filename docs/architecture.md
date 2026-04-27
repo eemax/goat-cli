@@ -39,24 +39,22 @@ For a prompt run:
 6. Validate the effective working directory
 7. Read stdin if present, enforcing size and UTF-8 rules
 8. Assemble the provider input from system layers and replayable session history
-9. If `--compact` is set or a conservative pre-send estimate exceeds `compact_at_tokens`, compact first
+9. If the assembled estimate nears `compact_at_tokens`, emit a warning suggesting manual compaction
 10. Create the run directory
-11. Execute the assistant/tool loop, compacting at safe points when needed
+11. Execute the assistant/tool loop
 12. Persist run transcript, provider metadata, and summary
 13. Project replayable records back into session history
 14. Print the final assistant text to stdout
 
-Scenario runs expand into sequential prompt runs in fresh sessions. Non-provider commands (version, doctor, sessions, runs, compact, agents, roles, prompts, skills, scenarios) stop earlier and never enter the assistant/tool loop.
+Scenario runs expand into sequential prompt runs in fresh sessions. Non-provider commands (version, doctor, sessions, runs, agents, roles, prompts, skills, scenarios) stop earlier and never enter the assistant/tool loop. `goat compact session` is a provider-backed maintenance run.
 
 ## Responses API ownership
 
 Goat uses a hybrid ownership model for the OpenAI Responses API.
 
-**Across runs**: fully stateful on the local filesystem. Each new run rebuilds its provider input from agent prompt, role overlay, compaction summary, replay history, and the current user message. No dependency on provider-side stored conversation state.
+**Across runs**: fully stateful on the local filesystem. Each new run rebuilds its provider input from agent prompt, role overlay, replay history, and the current user message. No dependency on provider-side stored conversation state.
 
 **Within a run**: the default runtime uses the OpenAI Agents SDK, which owns the model/tool loop and continues Responses API turns under the hood. Goat still records provider turns, transcripts, usage, local tool envelopes, and session commits. The lower-level `ProviderClient` loop remains available for tests and compatibility seams.
-
-If compaction rebuilds the working set mid-run, the continuation handle is dropped and the loop resumes from the rebuilt checkpoint.
 
 ## Module boundaries
 
@@ -123,24 +121,22 @@ Failed runs remain inspectable. Recovery paths: inspect with `goat runs show`, r
 
 ## Compaction
 
-Goat owns context management through runtime-controlled compaction:
+Goat keeps compaction deliberately manual:
 
-1. Before each provider request, estimate the next request size
-2. If it exceeds the effective `compact_at_tokens` budget, compact at the current safe point
-3. Compact durable cross-run history first
-4. Retain only as much raw history as fits within `raw_history_budget_pct`
-5. If that is still not enough, enter crisis mode to checkpoint-compact the current run
+1. Prompt assembly estimates the request size with the conservative local token heuristic.
+2. At 80% of `compact_at_tokens`, Goat writes a stderr warning recommending `goat compact session <id>`.
+3. Goat still sends the request; if the provider rejects an oversized context, that turn fails normally and remains inspectable.
+4. `goat compact session <id|last>` sends the full session replay plus the compaction prompt to the same agent/model.
+5. The assistant must return a JSON object. Goat validates it, then rewrites `messages.jsonl` to the compaction prompt and the normalized JSON checkpoint.
 
-Safe compaction points: before a provider request, after a response, after tool execution, before tool outputs are sent back.
-
-Compaction that changes the working set drops `previous_response_id` and continues from the rebuilt checkpoint.
+`--compact` runs that same explicit compaction after session/fork resolution and before the requested prompt turn. Empty sessions are a no-op.
 
 ## Token estimation
 
 Token handling splits into two roles:
 
 - **Actuals** (after each response): provider-reported usage is the source of truth for summaries and diagnostics.
-- **Pre-send** (before each request): a conservative client-side estimate of the full request payload, used only for compaction gating. Intentionally pessimistic.
+- **Pre-send** (before each request): a conservative client-side estimate of the full request payload, used only for warnings and diagnostics. Intentionally pessimistic.
 
 ## Growth path
 

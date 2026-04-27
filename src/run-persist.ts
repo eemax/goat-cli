@@ -4,18 +4,10 @@ import { AgentLoopError } from "./agent.js";
 import { ExitCode, GoatError, sessionConflictError } from "./errors.js";
 import type { ProviderTurnResult } from "./provider.js";
 import type { AppContext } from "./runtime-context.js";
-import {
-  acquireLock,
-  appendMessages,
-  loadSessionMeta,
-  sessionPaths,
-  writeCompactionState,
-  writeSessionMeta,
-} from "./session.js";
+import { acquireLock, appendMessages, loadSessionMeta, sessionPaths, writeSessionMeta } from "./session.js";
 import type {
   AgentDef,
   Command,
-  CompactionState,
   Effort,
   MessageRecord,
   PromptDef,
@@ -121,6 +113,7 @@ export function buildReplayRecords(
   command: RunCommand,
   stdinText: string | null,
   finalText: string,
+  options?: { compacted?: boolean },
 ): MessageRecord[] {
   const timestamp = nowIso();
   const records: MessageRecord[] = [
@@ -130,7 +123,7 @@ export function buildReplayRecords(
       kind: "message",
       run_id: runId,
       role: "user",
-      source: "cli_arg",
+      source: options?.compacted ? "compaction_prompt" : "cli_arg",
       prompt_name: command.options.prompt,
       content: command.message,
     },
@@ -172,8 +165,8 @@ export async function commitRun(params: {
   effectiveCwd: string;
   replayRecords: MessageRecord[];
   runUsage: ProviderUsage | null;
-  compactionState: CompactionState | null;
-  retainedMessages: MessageRecord[];
+  rewriteReplay: boolean;
+  existingMessages: MessageRecord[];
 }): Promise<void> {
   const paths = sessionPaths(params.context.config.paths.sessions_dir, params.sessionMeta.session_id);
   const lock = await acquireLock(paths.sessionLock);
@@ -189,7 +182,9 @@ export async function commitRun(params: {
       revision: fresh.revision + 1,
       updated_at: nowIso(),
       last_run_usage: params.runUsage,
-      message_count: params.retainedMessages.length + params.replayRecords.length,
+      message_count: params.rewriteReplay
+        ? params.replayRecords.length
+        : params.existingMessages.length + params.replayRecords.length,
       agent_name: params.sessionMeta.agent_name,
       role_name: params.updatedRoleName,
       model: params.modelId,
@@ -197,14 +192,11 @@ export async function commitRun(params: {
       cwd: params.effectiveCwd,
     };
 
-    if (params.compactionState) {
-      await writeCompactionState(
-        params.context.config.paths.sessions_dir,
-        params.sessionMeta.session_id,
-        params.compactionState,
+    if (params.rewriteReplay) {
+      await atomicWriteFile(
+        paths.messages,
+        `${params.replayRecords.map((record) => JSON.stringify(record)).join("\n")}\n`,
       );
-      const allMessages = [...params.retainedMessages, ...params.replayRecords];
-      await atomicWriteFile(paths.messages, `${allMessages.map((record) => JSON.stringify(record)).join("\n")}\n`);
     } else {
       await appendMessages(
         params.context.config.paths.sessions_dir,

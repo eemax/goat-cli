@@ -2,17 +2,17 @@
 
 This file captures the detailed work that did not fully land in the first implementation pass.
 
-## Deliberate Deviations In The First Pass
+## Current Compaction Direction
 
-- Compaction currently uses a deterministic local checkpoint heuristic instead of a model-generated compaction run.
-- Manual and `--compact` pre-run compaction now persist explicit `compaction` runs; automatic mid-run crisis compaction is still not implemented.
-- Mid-run crisis compaction and checkpoint rebuilding of the live unresolved loop are not implemented yet.
+- Compaction is intentionally manual.
+- `goat compact session <id|last>` and `--compact` run a provider-backed turn inside the target session using the built-in compaction prompt.
+- The assistant must return a JSON object; Goat validates it and rewrites `messages.jsonl` to the compaction prompt plus normalized JSON checkpoint.
+- Goat warns near `compact_at_tokens` but does not automatically compact or block the provider request.
+- If the user ignores the warning and the provider rejects the request for context size, the turn fails normally.
 - Assistant text is kept off stderr; `--verbose` emits numbered progress events without duplicating the final reply.
 
 ## Highest-Value Next Steps
 
-- Replace the local compaction heuristic with a real provider-backed compaction flow using the built-in prompt in [compaction-prompt.md](../../src/builtins/compaction-prompt.md).
-- Add mid-run safe-point compaction that can rebuild the working set, drop `previous_response_id`, and continue after a checkpoint.
 - Preserve and persist richer provider metadata, including normalized retry records and sanitized error details.
 - Add real fsync-backed durable commit boundaries instead of the current best-effort atomic rename approach.
 - Implement graceful `SIGINT` and `SIGTERM` handling that aborts provider requests, terminates child process groups, and writes terminal interrupted summaries.

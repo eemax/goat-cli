@@ -4,9 +4,10 @@ import pkg from "../package.json" with { type: "json" };
 
 import { parseArgv } from "./cli.js";
 import { compactSessionHistory } from "./compaction.js";
+import { resolveOpenAIApiKey } from "./config.js";
 import { formatDefinitionList, resolveModel } from "./defs.js";
 import { runDoctor } from "./doctor.js";
-import { ExitCode, GoatError, internalError, notFoundError } from "./errors.js";
+import { configError, ExitCode, GoatError, internalError, notFoundError } from "./errors.js";
 import { formatError, writeText } from "./io.js";
 import { executeRunCommand } from "./run.js";
 import type { CommandOutput, RuntimeDeps } from "./runtime-context.js";
@@ -98,13 +99,20 @@ export async function executeCommand(
         throw notFoundError(`agent \`${agentName}\` was not found`);
       }
       const model = resolveModel(context.models, session.model ?? agent.default_model);
+      const apiKey = await resolveOpenAIApiKey(context.config, env);
+      if (!apiKey) {
+        throw configError("OpenAI API key is not configured");
+      }
       const result = await compactSessionHistory({
         context,
         sessionMeta: session,
         agent,
         modelId: model.id,
+        providerModel: model.provider_model,
+        effort: session.effort ?? agent.default_effort,
         cwd: session.cwd ?? processCwd,
-        reason: "Manual compaction.",
+        apiKey,
+        deps,
       });
       return {
         stdout: result.runId ? `${result.runId}\n` : "",

@@ -1,5 +1,7 @@
 # Goat Persistence Model
 
+> Historical note: this planning document predates the simplified manual compaction model. Current persistence is documented in `docs/persistence.md`: there is no active `compaction.json`; manual compaction rewrites `messages.jsonl` to the compaction prompt plus the assistant's normalized JSON checkpoint.
+
 ## Overview
 
 Goat persists durable state to the local filesystem.

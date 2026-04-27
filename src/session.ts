@@ -5,7 +5,7 @@ import { basename, join } from "node:path";
 import { monotonicFactory } from "ulid";
 
 import { configError, notFoundError, sessionConflictError, stoppedSessionError } from "./errors.js";
-import type { CompactionState, MessageRecord, SessionMeta } from "./types.js";
+import type { MessageRecord, SessionMeta } from "./types.js";
 import { atomicWriteFile, isErrnoException, nowIso, parseJsonLine, stableJson } from "./utils.js";
 
 const nextUlid = monotonicFactory();
@@ -13,7 +13,6 @@ const nextUlid = monotonicFactory();
 export type SessionPaths = {
   root: string;
   meta: string;
-  compaction: string;
   messages: string;
   sessionLock: string;
   executionLock: string;
@@ -58,7 +57,6 @@ export function sessionPaths(sessionsDir: string, sessionId: string): SessionPat
   return {
     root,
     meta: join(root, "meta.json"),
-    compaction: join(root, "compaction.json"),
     messages: join(root, "messages.jsonl"),
     sessionLock: join(root, "session.lock"),
     executionLock: join(root, "execution.lock"),
@@ -214,22 +212,6 @@ export async function writeSessionMeta(sessionsDir: string, meta: SessionMeta): 
   await atomicWriteFile(paths.meta, stableJson(meta));
 }
 
-export async function loadCompactionState(sessionsDir: string, sessionId: string): Promise<CompactionState | null> {
-  const path = sessionPaths(sessionsDir, sessionId).compaction;
-  if (!(await exists(path))) {
-    return null;
-  }
-  return JSON.parse(await readFile(path, "utf8")) as CompactionState;
-}
-
-export async function writeCompactionState(
-  sessionsDir: string,
-  sessionId: string,
-  state: CompactionState,
-): Promise<void> {
-  await atomicWriteFile(sessionPaths(sessionsDir, sessionId).compaction, stableJson(state));
-}
-
 export async function listSessionIds(sessionsDir: string): Promise<string[]> {
   if (!(await exists(sessionsDir))) {
     return [];
@@ -304,9 +286,6 @@ export async function forkSession(sessionsDir: string, selector: string): Promis
     await copyFile(sourcePaths.messages, forkPaths.messages);
   } else {
     await writeFile(forkPaths.messages, "");
-  }
-  if (await exists(sourcePaths.compaction)) {
-    await copyFile(sourcePaths.compaction, forkPaths.compaction);
   }
   await writeSessionMeta(sessionsDir, forked);
   return forked;

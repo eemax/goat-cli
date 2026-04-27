@@ -32,9 +32,9 @@ export function sha256Hex(content: string | Uint8Array): string {
  *
  * Goat uses a conservative `chars / 3` heuristic everywhere: it slightly
  * overestimates compared to the OpenAI tokenizer, which is what we want when
- * the estimate drives compaction budgets and "approaching context window"
- * warnings. Do NOT swap this for a per-call heuristic in a hot path without
- * updating every other caller together.
+ * the estimate drives context-window warnings. Do NOT swap this for a
+ * per-call heuristic in a hot path without updating every other caller
+ * together.
  */
 export function estimateTextTokens(text: string): number {
   if (text.length === 0) {

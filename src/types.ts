@@ -117,37 +117,13 @@ export type SessionMeta = {
   cwd: string | null;
 };
 
-export type CompactionSummary = {
-  current_objective?: string;
-  last_user_request?: string;
-  user_preferences?: string[];
-  constraints?: string[];
-  decisions?: string[];
-  important_paths?: string[];
-  completed_work?: string[];
-  edits_made?: string[];
-  open_loops?: string[];
-  next_best_action?: string;
-  [key: string]: unknown;
-};
-
-export type CompactionState = {
-  v: 1;
-  updated_at: string;
-  source_revision: number;
-  compaction_count: number;
-  raw_history_budget_pct: number;
-  retained_raw_token_estimate: number;
-  summary: CompactionSummary;
-};
-
 export type MessageRecord = {
   v: 1;
   ts: string;
   kind: "message";
   run_id: string;
   role: "user" | "assistant";
-  source?: "cli_arg" | "stdin" | "assistant_final";
+  source?: "cli_arg" | "stdin" | "assistant_final" | "compaction_prompt";
   prompt_name?: string | null;
   content: string;
 };
@@ -180,14 +156,6 @@ export type TranscriptRecord =
         name: string;
         arguments: Record<string, unknown>;
       }>;
-      artifact?: ArtifactRef | null;
-    }
-  | {
-      v: 1;
-      ts: string;
-      kind: "compaction_checkpoint";
-      run_id: string;
-      summary: string;
       artifact?: ArtifactRef | null;
     }
   | {
@@ -321,8 +289,6 @@ export type GlobalConfig = {
     stderr_message_max_chars: number;
   };
   compaction: {
-    model: string | null;
-    raw_history_budget_pct: number;
     prompt_file: string | null;
   };
   artifacts: {

@@ -866,7 +866,7 @@ system_prompt = "You are the coding agent."
     expect(meta.model).toBe("friendly-mini");
   });
 
-  test("guards on the fully assembled prompt size before sending the provider request", async () => {
+  test("warns near compact_at_tokens but still sends the provider request", async () => {
     const { repoRoot, homeRoot } = await createRepoFixture({
       agentToml: `
 name = "coder"
@@ -928,10 +928,10 @@ system_prompt = "${"A".repeat(260)}"
     ]);
 
     const result = await runCli(["--session", session.session_id, "continue"], provider, repoRoot, homeRoot);
-    expect(result.stdout).toBe("");
-    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe("compacted answer\n");
+    expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain("compact_at_tokens");
-    expect(provider.requests).toHaveLength(0);
+    expect(provider.requests).toHaveLength(1);
   });
 
   test("runs manual session compaction as a persisted compaction run", async () => {
@@ -986,7 +986,26 @@ system_prompt = "You are the coding agent."
       model: "gpt-5.4-mini",
     });
 
-    const result = await runCli(["compact", "session", session.session_id], new FakeProvider([]), repoRoot, homeRoot);
+    const result = await runCli(
+      ["compact", "session", session.session_id],
+      new FakeProvider([
+        {
+          response_id: "resp-compact-manual",
+          previous_response_id: null,
+          status: "completed",
+          output_text: JSON.stringify({
+            current_objective: "Continue from a compact checkpoint.",
+            completed_work: ["Recorded the earlier large exchange."],
+            next_best_action: "Continue the task.",
+          }),
+          tool_calls: [],
+          usage: null,
+          raw_response: {} as any,
+        },
+      ]),
+      repoRoot,
+      homeRoot,
+    );
 
     expect(result.exitCode).toBe(0);
     const runId = result.stdout.trim();
@@ -994,7 +1013,8 @@ system_prompt = "You are the coding agent."
     const compacted = (await readFile(join(sessionsDir, session.session_id, "messages.jsonl"), "utf8"))
       .split("\n")
       .filter(Boolean);
-    expect(compacted.length).toBeLessThan(history.length);
+    expect(compacted).toHaveLength(2);
+    expect(JSON.parse(JSON.parse(compacted[1]!).content).current_objective).toBe("Continue from a compact checkpoint.");
     const summary = JSON.parse(
       await readFile(join(sessionsDir, session.session_id, "runs", runId, "summary.json"), "utf8"),
     );
@@ -1055,7 +1075,20 @@ system_prompt = "You are the coding agent."
     });
     const provider = new FakeProvider([
       {
-        response_id: "resp-compact-flag",
+        response_id: "resp-compact-flag-1",
+        previous_response_id: null,
+        status: "completed",
+        output_text: JSON.stringify({
+          current_objective: "Keep going from the checkpoint.",
+          completed_work: ["Compressed old history."],
+          next_best_action: "Answer the user's next prompt.",
+        }),
+        tool_calls: [],
+        usage: null,
+        raw_response: {} as any,
+      },
+      {
+        response_id: "resp-compact-flag-2",
         previous_response_id: null,
         status: "completed",
         output_text: "after compact",
@@ -1073,6 +1106,9 @@ system_prompt = "You are the coding agent."
     );
 
     expect(result.stdout).toBe("after compact\n");
+    expect(provider.requests).toHaveLength(2);
+    expect(JSON.stringify(provider.requests[1]?.input)).toContain("Keep going from the checkpoint.");
+    expect(JSON.stringify(provider.requests[1]?.input)).not.toContain("A".repeat(1000));
     const runIds = await readdir(join(sessionsDir, session.session_id, "runs"));
     expect(runIds).toHaveLength(2);
     const summaries = await Promise.all(
@@ -1116,7 +1152,6 @@ describe("goat doctor", () => {
     expect(stdout).toContain("PASS config");
     expect(stdout).toContain("PASS models");
     expect(stdout).toContain("PASS definitions");
-    expect(stdout).toContain("SKIP compaction_model");
     expect(stdout).toContain("SKIP compaction_prompt");
     expect(stdout).toContain("PASS sessions_dir");
     expect(stdout).toContain("PASS openai_credentials");
@@ -1133,7 +1168,7 @@ describe("goat doctor", () => {
     expect(stdout).not.toContain("PASS models");
   });
 
-  test("fails when compaction model is set but unknown", async () => {
+  test("fails config check when removed compaction model key is set", async () => {
     const { repoRoot, homeRoot } = await createRepoFixture();
     const { stdout, exitCode } = await runDoctorCli(repoRoot, homeRoot, {
       goatToml: `
@@ -1145,6 +1180,6 @@ model = "no-such-model"
 `,
     });
     expect(exitCode).toBe(11);
-    expect(stdout).toContain("FAIL compaction_model");
+    expect(stdout).toContain("FAIL config");
   });
 });

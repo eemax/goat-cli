@@ -39,7 +39,7 @@ If `--session` is omitted from `runs list`, it defaults to `last`.
 ### Compaction
 
 ```
-goat compact session <id|last>  Run deterministic session-history compaction
+goat compact session <id|last>  Ask the session to compact itself into JSON
 ```
 
 ### Definitions and metadata
@@ -64,7 +64,7 @@ goat doctor      Run preflight checks
 | `--no-role` | Clear the stored role | yes |
 | `--prompt <name>` | One-turn prompt prefix | no |
 | `--skill <id>` | Invoke one skill for this turn. Repeatable. | no |
-| `--compact` | Run deterministic compaction before the prompt turn starts | no |
+| `--compact` | Run explicit session compaction before the prompt turn starts | no |
 | `--scenario <id>` | Run a scenario chain. Only valid with new sessions. | no |
 | `--model <name>` | Override model | yes |
 | `--effort <level>` | Reasoning effort | yes |
@@ -99,7 +99,7 @@ Injects a loaded skill into the current user turn. When both `--prompt` and `--s
 
 ### `--compact`
 
-Runs the same deterministic session compaction as `goat compact session <id|last>` after session/fork resolution and before prompt assembly. On a new empty session this is a no-op.
+Runs the same provider-backed compaction as `goat compact session <id|last>` after session/fork resolution and before prompt assembly. The compaction turn uses the target session's agent/model, expects a JSON object, and rewrites replay history to that checkpoint. On a new empty session this is a no-op.
 
 ### `--scenario <id>`
 
@@ -149,7 +149,7 @@ Reserved for user-consumable command results only:
 
 ### Stderr
 
-Default successful prompt runs write no stderr. Errors go to stderr. With `--verbose`, `--debug`, or `--debug-json`, Goat emits numbered capped events for system status, tool calls/results, and errors. Assistant text deltas and the final assistant reply are never streamed to stderr.
+Default successful prompt runs write no stderr unless the assembled prompt estimate is nearing `compact_at_tokens`; in that case Goat warns that manual compaction should be run soon and still sends the request. Errors go to stderr. With `--verbose`, `--debug`, or `--debug-json`, Goat emits numbered capped events for system status, tool calls/results, and errors. Assistant text deltas and the final assistant reply are never streamed to stderr.
 
 ### Doctor output
 
@@ -164,7 +164,7 @@ mapping from error code to exit code is stable and documented below.
 |------|------|------------------|
 | 0 | Success | The command completed normally. |
 | 1 | Internal runtime error | Unhandled exception, unexpected invariant failure, or unknown command kind. Anything not classified as a Goat error falls here. |
-| 2 | Usage / input error | `USAGE_ERROR` — bad CLI args, conflicting flags, unknown flag, missing prompt argument, stdin larger than `runtime.max_stdin`, effective cwd missing or not a directory, assembled prompt still exceeds `compact_at_tokens` after compaction. |
+| 2 | Usage / input error | `USAGE_ERROR` — bad CLI args, conflicting flags, unknown flag, missing prompt argument, stdin larger than `runtime.max_stdin`, effective cwd missing or not a directory. |
 | 3 | Config / definition error | `CONFIG_ERROR` — invalid `goat.toml` / `models.toml`, duplicate model id or alias, missing default agent, agent enables an unknown tool, agent references an unknown model, bound session cannot switch agents, missing API key. |
 | 4 | Not found | `NOT_FOUND` — session, agent, role, prompt, or run id not found; `goat last` with no active session containing committed history. |
 | 5 | Stopped session | `STOPPED_SESSION` — the target session has been stopped via `goat sessions stop`. |

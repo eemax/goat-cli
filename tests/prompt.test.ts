@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { assemblePrompt, renderCompactionCheckpoint } from "../src/prompt.js";
-import type { AgentDef, CompactionState, MessageRecord, PromptDef, RoleDef } from "../src/types.js";
+import { assemblePrompt } from "../src/prompt.js";
+import type { AgentDef, MessageRecord, PromptDef, RoleDef } from "../src/types.js";
 
 const agent: AgentDef = {
   name: "coder",
@@ -41,20 +41,6 @@ const prompt: PromptDef = {
   source_path: "/tmp/prompts/repo-summary.toml",
 };
 
-const compaction: CompactionState = {
-  v: 1,
-  updated_at: "2026-04-10T00:00:00Z",
-  source_revision: 5,
-  compaction_count: 1,
-  raw_history_budget_pct: 0.2,
-  retained_raw_token_estimate: 1234,
-  summary: {
-    current_objective: "Finish the first implementation pass.",
-    decisions: ["Use Bun + TypeScript."],
-    open_loops: ["Provider retry tuning."],
-  },
-};
-
 function sessionMessage(role: MessageRecord["role"], content: string): MessageRecord {
   return {
     v: 1,
@@ -66,16 +52,6 @@ function sessionMessage(role: MessageRecord["role"], content: string): MessageRe
   };
 }
 
-describe("renderCompactionCheckpoint", () => {
-  test("renders deterministic checkpoint text", () => {
-    expect(renderCompactionCheckpoint(compaction)).toContain("Session checkpoint:");
-    expect(renderCompactionCheckpoint(compaction)).toContain(
-      "current_objective: Finish the first implementation pass.",
-    );
-    expect(renderCompactionCheckpoint(compaction)).toContain("decisions:");
-  });
-});
-
 describe("assemblePrompt", () => {
   test("assembles instructions and ordered input messages", () => {
     const result = assemblePrompt({
@@ -83,7 +59,6 @@ describe("assemblePrompt", () => {
       role,
       prompt,
       skills: [agent.skills[0]!],
-      compaction,
       sessionMessages: [sessionMessage("user", "Earlier request"), sessionMessage("assistant", "Earlier answer")],
       userMessage: "Inspect the project",
       stdinText: "Extra stdin",
@@ -93,7 +68,6 @@ describe("assemblePrompt", () => {
     expect(result.instructions).toContain(role.system_prompt);
     expect(result.instructions).toContain("<available_skills>");
     expect(result.instructions).toContain('<skill name="Research" path="/tmp/skills/research/SKILL.md">');
-    expect(result.instructions).toContain("Session checkpoint:");
     expect(result.input).toEqual([
       { role: "user", content: "Earlier request" },
       { role: "assistant", content: "Earlier answer" },
@@ -119,7 +93,6 @@ describe("assemblePrompt", () => {
       role: null,
       prompt: null,
       skills: [],
-      compaction: null,
       sessionMessages: [],
       userMessage: "Inspect the project",
       stdinText: null,
@@ -127,6 +100,5 @@ describe("assemblePrompt", () => {
 
     expect(result.instructions).toBe(`${agent.system_prompt}\n\n${"<available_skills>\n</available_skills>"}`);
     expect(result.input).toEqual([{ role: "user", content: "Inspect the project" }]);
-    expect(result.compaction_checkpoint).toBeNull();
   });
 });

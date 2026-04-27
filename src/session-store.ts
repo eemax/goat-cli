@@ -9,7 +9,6 @@ import {
   lastActiveSession,
   listRunIds,
   listSessionIds,
-  loadCompactionState,
   loadSessionMeta,
   type RunPaths,
   readMessages,
@@ -18,10 +17,9 @@ import {
   type SessionPaths,
   sessionPaths,
   stopSession,
-  writeCompactionState,
   writeSessionMeta,
 } from "./session.js";
-import type { CompactionState, MessageRecord, SessionMeta, SessionSelector } from "./types.js";
+import type { MessageRecord, SessionMeta, SessionSelector } from "./types.js";
 
 /**
  * Bag-of-methods wrapper around the on-disk session layout. Binds a single
@@ -53,14 +51,6 @@ export class SessionStore {
 
   public writeMeta(meta: SessionMeta): Promise<void> {
     return writeSessionMeta(this.sessionsDir, meta);
-  }
-
-  public loadCompactionState(sessionId: string): Promise<CompactionState | null> {
-    return loadCompactionState(this.sessionsDir, sessionId);
-  }
-
-  public writeCompactionState(sessionId: string, state: CompactionState): Promise<void> {
-    return writeCompactionState(this.sessionsDir, sessionId, state);
   }
 
   public listSessionIds(): Promise<string[]> {
