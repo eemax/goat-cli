@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { configError } from "./errors.js";
 import type { SkillDef } from "./types.js";
@@ -11,7 +11,7 @@ type ParsedFrontmatter = {
 
 const SKILL_ID_PATTERN = /^[a-z][a-z0-9_]*$/;
 
-export function toSkillId(folderName: string): string {
+function toSkillId(folderName: string): string {
   return folderName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
 }
 
@@ -158,12 +158,4 @@ export function formatSkillsList(
     }
   }
   return lines.length ? `${lines.join("\n")}\n` : "";
-}
-
-export function containingDirectory(path: string): string {
-  return dirname(path);
-}
-
-export function skillFolderName(path: string): string {
-  return basename(dirname(path));
 }

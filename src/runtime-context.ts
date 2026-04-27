@@ -4,7 +4,7 @@ import { discoverRoots, loadGlobalConfig } from "./config.js";
 import { loadDefinitions, loadModelCatalog } from "./defs.js";
 import type { ProviderClient } from "./provider.js";
 
-export type FetchImpl = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+type FetchImpl = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export type RuntimeDeps = {
   processCwd?: string;
@@ -13,7 +13,7 @@ export type RuntimeDeps = {
   fetchImpl?: FetchImpl;
 };
 
-export type BaseContext = {
+type BaseContext = {
   roots: Awaited<ReturnType<typeof discoverRoots>>;
   config: Awaited<ReturnType<typeof loadGlobalConfig>>;
 };

@@ -77,7 +77,7 @@ function validateLayerAliases(entries: Array<z.infer<typeof rawModelsSchema>["mo
   }
 }
 
-export type ModelCatalog = {
+type ModelCatalog = {
   byId: Map<string, ModelDef>;
   aliasToId: Map<string, string>;
   shadowedAliases: string[];
@@ -272,7 +272,7 @@ const rawScenarioSchema = z
     }
   });
 
-export type Definitions = {
+type Definitions = {
   agents: Map<string, AgentDef>;
   roles: Map<string, RoleDef>;
   prompts: Map<string, PromptDef>;

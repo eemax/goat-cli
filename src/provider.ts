@@ -18,7 +18,7 @@ import type { Effort, ProviderTool, ProviderUsage } from "./types.js";
 
 export type ProviderInputItem = EasyInputMessage | ResponseFunctionToolCallOutputItem;
 
-export type ProviderToolCall = {
+type ProviderToolCall = {
   call_id: string;
   name: string;
   arguments: string;

@@ -234,32 +234,6 @@ The Exa search mode is controlled by `[tools.web_search].type`, not exposed to t
 
 Uses `defuddle parse <url> --md` and returns extracted markdown. Private-network targets are blocked when `[tools.web_fetch].block_private_hosts` is true.
 
-## Stub tools (V1)
-
-| Tool | Future backing | Access class |
-|------|---------------|--------------|
-| `subagents` | External subagents CLI | mutating |
-
-### `subagents` (stub)
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `action` | string | yes | Subagent dispatch action identifier |
-
-Stub tools return:
-
-```json
-{
-  "ok": false,
-  "summary": "<tool> is not implemented in V1.",
-  "error": {
-    "code": "UNIMPLEMENTED_IN_V1",
-    "message": "<tool> is not implemented in V1.",
-    "retryable": false
-  }
-}
-```
-
 ## Plan mode behavior
 
 | Tool class | Behavior |
@@ -278,4 +252,4 @@ Planned results use the normal envelope with `"planned": true` in data.
 - Configured shell exists
 - OpenAI credentials are discoverable
 - Provider accepts authenticated ping
-- Exa/Defuddle credentials when their sections are enabled
+- Exa/Defuddle credentials when an agent enables the corresponding tool

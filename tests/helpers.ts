@@ -29,25 +29,19 @@ export const testToolsConfig: GlobalConfig["tools"] = {
   max_output_chars: 200,
   max_file_size: 1 * 1024 * 1024,
   web_search: {
-    enabled: false,
     api_key: null,
     api_key_env: "EXA_API_KEY",
     base_url: "https://api.exa.ai",
     type: "auto",
   },
   web_fetch: {
-    enabled: false,
     block_private_hosts: true,
     command: "defuddle",
     timeout: 45,
   },
-  subagents: {
-    enabled: false,
-    default_model: "gpt-5.4-mini",
-  },
 };
 
-export const testArtifactsConfig: GlobalConfig["artifacts"] = {
+const testArtifactsConfig: GlobalConfig["artifacts"] = {
   preview_limit: 50 * 1024,
   catastrophic_output_limit: 4096,
 };

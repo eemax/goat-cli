@@ -35,7 +35,7 @@ export type RunSummaryInputs = {
   artifactStats: { count: number; total_bytes: number };
 };
 
-export type RunOutcome =
+type RunOutcome =
   | {
       kind: "completed";
       finalText: string;

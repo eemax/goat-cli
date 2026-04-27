@@ -10,7 +10,7 @@ import { atomicWriteFile, isErrnoException, nowIso, parseJsonLine, stableJson } 
 
 const nextUlid = monotonicFactory();
 
-export type SessionPaths = {
+type SessionPaths = {
   root: string;
   meta: string;
   messages: string;
@@ -178,7 +178,7 @@ export async function createSession(sessionsDir: string): Promise<SessionMeta> {
   return meta;
 }
 
-export function createFreshSessionMeta(sessionId: string): SessionMeta {
+function createFreshSessionMeta(sessionId: string): SessionMeta {
   const timestamp = nowIso();
   return {
     v: 1,

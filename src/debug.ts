@@ -9,9 +9,9 @@ import { estimateTokensConservative, nowIso } from "./utils.js";
 
 type DebugMode = "off" | "human" | "json";
 
-export type DebugCategory = "config" | "session" | "context" | "compaction" | "provider" | "tool" | "run" | "error";
+type DebugCategory = "config" | "session" | "context" | "compaction" | "provider" | "tool" | "run" | "error";
 
-export type DebugEvent = {
+type DebugEvent = {
   ts: string;
   category: DebugCategory;
   event: string;

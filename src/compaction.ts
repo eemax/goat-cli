@@ -33,7 +33,7 @@ import { atomicWriteFile, nowIso, stableJson } from "./utils.js";
 
 const BUILTIN_COMPACTION_PROMPT = new URL("./builtins/compaction-prompt.md", import.meta.url);
 
-export type ManualCompactionResult = {
+type ManualCompactionResult = {
   runId: string | null;
   changed: boolean;
   retainedMessages: number;

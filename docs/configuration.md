@@ -113,7 +113,6 @@ Compaction is a normal provider-backed turn inside the target session. It uses t
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `enabled` | bool | `false` | Enable Exa-backed web search |
 | `api_key` | string | unset | Exa API key |
 | `api_key_env` | string | `EXA_API_KEY` | Exa API key env var |
 | `base_url` | string | `https://api.exa.ai` | Exa API base URL |
@@ -123,17 +122,9 @@ Compaction is a normal provider-backed turn inside the target session. It uses t
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `enabled` | bool | `false` | Enable Defuddle CLI web fetch |
 | `block_private_hosts` | bool | `true` | Block private-network targets |
 | `command` | string | `defuddle` | Defuddle CLI command |
 | `timeout` | duration | `45s` | Defuddle command timeout |
-
-### `[tools.subagents]`
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `enabled` | bool | `false` | Enable subagents (stub in V1) |
-| `default_model` | string | `gpt-5.4-mini` | Default subagent model |
 
 ## models.toml
 

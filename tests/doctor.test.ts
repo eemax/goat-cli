@@ -22,15 +22,6 @@ async function makeRepo(options?: { goatToml?: string; modelsToml?: string; agen
       `
 [defaults]
 agent = "coder"
-
-[tools.web_search]
-enabled = false
-
-[tools.web_fetch]
-enabled = false
-
-[tools.subagents]
-enabled = false
 `,
   );
   await writeFile(
@@ -137,9 +128,12 @@ system_prompt = "Empty tools — invalid."
       goatToml: `
 [defaults]
 agent = "coder"
-
-[tools.web_search]
-enabled = true
+`,
+      agentToml: `
+name = "coder"
+default_model = "mini"
+enabled_tools = ["read_file", "web_search"]
+system_prompt = "Coder."
 `,
     });
     const cleanedEnv = { ...env };
@@ -156,9 +150,12 @@ enabled = true
       goatToml: `
 [defaults]
 agent = "coder"
-
-[tools.web_search]
-enabled = true
+`,
+      agentToml: `
+name = "coder"
+default_model = "mini"
+enabled_tools = ["read_file", "web_search"]
+system_prompt = "Coder."
 `,
     });
     const output = await runDoctor(

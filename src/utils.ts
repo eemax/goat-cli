@@ -36,7 +36,7 @@ export function sha256Hex(content: string | Uint8Array): string {
  * per-call heuristic in a hot path without updating every other caller
  * together.
  */
-export function estimateTextTokens(text: string): number {
+function estimateTextTokens(text: string): number {
   if (text.length === 0) {
     return 0;
   }

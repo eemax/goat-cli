@@ -73,9 +73,10 @@ export async function runDoctor(
     checks.push({ name: "models", status: "FAIL", reason: formatError(error) });
   }
 
+  let definitions: Awaited<ReturnType<typeof loadDefinitions>> | null = null;
   if (models) {
     try {
-      await loadDefinitions(roots, models);
+      definitions = await loadDefinitions(roots, models);
       checks.push({ name: "definitions", status: "PASS" });
     } catch (error) {
       checks.push({ name: "definitions", status: "FAIL", reason: formatError(error) });
@@ -132,7 +133,14 @@ export async function runDoctor(
     }
   }
 
-  if (config.tools.web_search.enabled) {
+  const enabledToolIds = new Set<string>();
+  for (const agent of definitions?.agents.values() ?? []) {
+    for (const toolId of agent.enabled_tools) {
+      enabledToolIds.add(toolId);
+    }
+  }
+
+  if (enabledToolIds.has("web_search")) {
     const searchKey = config.tools.web_search.api_key ?? env[config.tools.web_search.api_key_env];
     if (searchKey) {
       checks.push({ name: "web_search_credentials", status: "PASS" });
@@ -145,21 +153,12 @@ export async function runDoctor(
     }
   }
 
-  if (config.tools.web_fetch.enabled) {
+  if (enabledToolIds.has("web_fetch")) {
     const hasDefuddle = await commandExists(config.tools.web_fetch.command);
     checks.push({
       name: "web_fetch_defuddle",
       status: hasDefuddle ? "PASS" : "FAIL",
       reason: hasDefuddle ? undefined : `${config.tools.web_fetch.command} not found in PATH`,
-    });
-  }
-
-  if (config.tools.subagents.enabled) {
-    const hasSubagents = await commandExists("subagents");
-    checks.push({
-      name: "subagents_cli",
-      status: hasSubagents ? "PASS" : "FAIL",
-      reason: hasSubagents ? undefined : "subagents CLI not found in PATH",
     });
   }
 

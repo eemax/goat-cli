@@ -24,17 +24,11 @@ max_output_chars = "200k"
 max_file_size = "1mb"
 
 [tools.web_search]
-enabled = true
 api_key_env = "EXA_API_KEY"
 base_url = "https://api.exa.ai"
 type = "auto"
 
 [tools.web_fetch]
-enabled = true
 block_private_hosts = true
 command = "defuddle"
 timeout = "45s"
-
-[tools.subagents]
-enabled = false
-default_model = "gpt-5.4-mini"

@@ -8,7 +8,7 @@ V1 is intentionally narrow:
 
 - One process, one CLI entrypoint
 - One session store (local filesystem)
-- One OpenAI runtime (Agents SDK on top of the Responses API)
+- One OpenAI runtime (Responses API)
 - One tool harness
 - One strict stdout/stderr contract
 
@@ -21,7 +21,7 @@ The goal is a boring, reliable core with strong boundaries and durable on-disk s
 - **Modular** -- providers, tools, and higher-level products layer on top of stable interfaces.
 - **Scriptable** -- stdout is machine-safe for the final reply; stderr carries progress and diagnostics.
 - **Auditable** -- every run leaves behind enough artifacts to explain what happened.
-- **Extensible** -- skills, scenarios, future web tooling, and subagents fit without warping the core model.
+- **Extensible** -- skills, scenarios, and web tooling fit without warping the core model.
 
 ## Implementation
 
@@ -50,11 +50,11 @@ Scenario runs expand into sequential prompt runs in fresh sessions. Non-provider
 
 ## Responses API ownership
 
-Goat uses a hybrid ownership model for the OpenAI Responses API.
+Goat owns the OpenAI Responses API loop directly.
 
 **Across runs**: fully stateful on the local filesystem. Each new run rebuilds its provider input from agent prompt, role overlay, replay history, and the current user message. No dependency on provider-side stored conversation state.
 
-**Within a run**: the default runtime uses the OpenAI Agents SDK, which owns the model/tool loop and continues Responses API turns under the hood. Goat still records provider turns, transcripts, usage, local tool envelopes, and session commits. The lower-level `ProviderClient` loop remains available for tests and compatibility seams.
+**Within a run**: Goat calls the Responses API, executes requested local tools, then sends function-call outputs back until the provider returns a final assistant message. Goat records provider turns, transcripts, usage, local tool envelopes, and session commits.
 
 ## Module boundaries
 
@@ -66,9 +66,8 @@ Goat uses a hybrid ownership model for the OpenAI Responses API.
 | `src/defs.ts` | Model/agent/role/prompt/scenario definition loading |
 | `src/session.ts` | Session lifecycle: create, resolve, list, show, stop, fork, locking |
 | `src/prompt.ts` | Prompt stack assembly, pre-send token estimation |
-| `src/agents-sdk.ts` | Agents SDK runtime adapter, result mapping, usage normalization |
-| `src/provider.ts` | Legacy Responses provider adapter for injected tests and low-level compatibility |
-| `src/agent.ts` | Legacy provider/tool loop used with injected `ProviderClient` implementations |
+| `src/provider.ts` | Responses provider adapter |
+| `src/agent.ts` | Provider/tool loop |
 | `src/harness.ts` | Tool registry, argument validation, limits, output envelope normalization |
 | `src/tools-*.ts` | Individual tool implementations |
 | `src/skills.ts` | Skill loading, listing, and one-turn invocation rendering |
@@ -141,8 +140,7 @@ Token handling splits into two roles:
 ## Growth path
 
 1. Solid local CLI core (V1)
-2. Real web tooling (web_search, web_fetch)
-3. Real subagents
-4. Refined compaction strategies
-5. Richer machine-facing event surfaces
-6. Higher-level products on top of the CLI contract
+2. Web tooling (web_search, web_fetch)
+3. Refined compaction strategies
+4. Richer machine-facing event surfaces
+5. Higher-level products on top of the CLI contract

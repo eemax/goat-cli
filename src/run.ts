@@ -1,12 +1,11 @@
 import type { Readable, Writable } from "node:stream";
-import type { AgentInputItem } from "@openai/agents";
 import { AgentLoopError, runAgentLoop } from "./agent.js";
-import { runAgentsSdkLoop } from "./agents-sdk.js";
 import { ArtifactStore } from "./artifacts.js";
 import { createDebugSink, type DebugSink, debugErrorData } from "./debug.js";
 import { ExitCode, GoatError, sessionConflictError, timeoutError } from "./errors.js";
 import { exportProviderTools, type ToolContext } from "./harness.js";
 import { formatError, writeText } from "./io.js";
+import { OpenAIResponsesProvider } from "./provider.js";
 import {
   appendJsonlRecord,
   buildReplayRecords,
@@ -37,28 +36,6 @@ import { nowIso } from "./utils.js";
 
 type RunCommand = Extract<Command, { kind: "run" }>;
 type LockState = { executionLock: LockHandle | null };
-
-function toAgentsSdkInputItem(message: { role: "user" | "assistant"; content: string }): AgentInputItem {
-  if (message.role === "assistant") {
-    return {
-      type: "message",
-      role: "assistant",
-      status: "completed",
-      content: [
-        {
-          type: "output_text",
-          text: message.content,
-        },
-      ],
-    };
-  }
-
-  return {
-    type: "message",
-    role: "user",
-    content: message.content,
-  };
-}
 
 /**
  * Build the tool context for a run. The mutation lock is acquired lazily —
@@ -282,42 +259,28 @@ export async function executeRunCommand(
       role: message.role,
       content: message.content,
     }));
-    const agentsSdkInput = promptAssembly.input.map(toAgentsSdkInputItem);
-    const loopResult = deps?.createProvider
-      ? await runAgentLoop({
-          runId,
-          provider: deps.createProvider({
-            apiKey,
-            baseURL: context.config.provider.base_url,
-            timeoutSeconds: context.config.provider.timeout,
-          }),
-          model: providerModel,
-          instructions: promptAssembly.instructions,
-          initialInput: providerInput,
-          tools: exportProviderTools(agent.enabled_tools),
-          enabledTools: agent.enabled_tools,
-          effort,
-          maxOutputTokens: agent.max_output_tokens,
-          contextWindowTokens: modelContextWindow,
-          toolContext,
-          debug,
-        })
-      : await runAgentsSdkLoop({
-          runId,
-          config: {
-            apiKey,
-            baseURL: context.config.provider.base_url,
-            timeoutSeconds: context.config.provider.timeout,
-          },
-          model: providerModel,
-          instructions: promptAssembly.instructions,
-          initialInput: agentsSdkInput,
-          enabledTools: agent.enabled_tools,
-          effort,
-          maxOutputTokens: agent.max_output_tokens,
-          toolContext,
-          debug,
-        });
+    const providerConfig = {
+      apiKey,
+      baseURL: context.config.provider.base_url,
+      timeoutSeconds: context.config.provider.timeout,
+    };
+    const provider = deps?.createProvider
+      ? deps.createProvider(providerConfig)
+      : new OpenAIResponsesProvider(providerConfig);
+    const loopResult = await runAgentLoop({
+      runId,
+      provider,
+      model: providerModel,
+      instructions: promptAssembly.instructions,
+      initialInput: providerInput,
+      tools: exportProviderTools(agent.enabled_tools),
+      enabledTools: agent.enabled_tools,
+      effort,
+      maxOutputTokens: agent.max_output_tokens,
+      contextWindowTokens: modelContextWindow,
+      toolContext,
+      debug,
+    });
 
     observedUsage = loopResult.usage;
 

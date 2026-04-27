@@ -4,9 +4,9 @@ export type Effort = (typeof EFFORT_VALUES)[number];
 
 export type SessionSelector = "new" | "last" | string;
 
-export type RunCommandName = "new" | "last" | "explicit";
+type RunCommandName = "new" | "last" | "explicit";
 
-export type DoctorCheckStatus = "PASS" | "FAIL" | "SKIP";
+type DoctorCheckStatus = "PASS" | "FAIL" | "SKIP";
 
 export type ToolAccessClass = "read_only" | "mutating";
 
@@ -192,36 +192,6 @@ export type TranscriptRecord =
       termination_reason: string;
     };
 
-export type ProviderRecord =
-  | {
-      v: 1;
-      ts: string;
-      kind: "provider_turn";
-      run_id: string;
-      provider: "openai_responses";
-      transport: "http";
-      request_index: number;
-      response_id: string | null;
-      previous_response_id: string | null;
-      model: string;
-      status: string;
-      tool_call_count: number;
-      output_text_chars: number;
-      usage: ProviderUsage | null;
-    }
-  | {
-      v: 1;
-      ts: string;
-      kind: "provider_error";
-      run_id: string;
-      provider: "openai_responses";
-      transport: "http";
-      request_index: number;
-      error_code: string;
-      message: string;
-      retryable: boolean;
-    };
-
 export type RunSummary = {
   v: 1;
   session_id: string;
@@ -301,21 +271,15 @@ export type GlobalConfig = {
     max_output_chars: number;
     max_file_size: number;
     web_search: {
-      enabled: boolean;
       api_key: string | null;
       api_key_env: string;
       base_url: string;
       type: "auto" | "neural" | "deep";
     };
     web_fetch: {
-      enabled: boolean;
       block_private_hosts: boolean;
       command: string;
       timeout: number;
-    };
-    subagents: {
-      enabled: boolean;
-      default_model: string;
     };
   };
 };
@@ -367,7 +331,7 @@ export type PromptDef = {
   source_path: string;
 };
 
-export type ScenarioStepDef = {
+type ScenarioStepDef = {
   id: string;
   agent: string;
   role: string | null;

@@ -66,7 +66,6 @@ const rawConfigSchema = z
         max_file_size: bytesSchema.optional(),
         web_search: z
           .object({
-            enabled: z.boolean().optional(),
             api_key: z.string().min(1).optional(),
             api_key_env: z.string().min(1).optional(),
             base_url: z.string().url().optional(),
@@ -76,17 +75,9 @@ const rawConfigSchema = z
           .optional(),
         web_fetch: z
           .object({
-            enabled: z.boolean().optional(),
             block_private_hosts: z.boolean().optional(),
             command: z.string().min(1).optional(),
             timeout: timeSchema.optional(),
-          })
-          .strict()
-          .optional(),
-        subagents: z
-          .object({
-            enabled: z.boolean().optional(),
-            default_model: z.string().min(1).optional(),
           })
           .strict()
           .optional(),
@@ -223,21 +214,15 @@ function normalizeGlobalConfig(raw: RawConfig, defaultRoot: string): GlobalConfi
       max_output_chars: raw.tools?.max_output_chars ?? 200000,
       max_file_size: raw.tools?.max_file_size ?? 1 * 1024 * 1024,
       web_search: {
-        enabled: raw.tools?.web_search?.enabled ?? false,
         api_key: raw.tools?.web_search?.api_key ?? null,
         api_key_env: raw.tools?.web_search?.api_key_env ?? "EXA_API_KEY",
         base_url: raw.tools?.web_search?.base_url ?? "https://api.exa.ai",
         type: raw.tools?.web_search?.type ?? "auto",
       },
       web_fetch: {
-        enabled: raw.tools?.web_fetch?.enabled ?? false,
         block_private_hosts: raw.tools?.web_fetch?.block_private_hosts ?? true,
         command: raw.tools?.web_fetch?.command ?? "defuddle",
         timeout: raw.tools?.web_fetch?.timeout ?? 45,
-      },
-      subagents: {
-        enabled: raw.tools?.subagents?.enabled ?? false,
-        default_model: raw.tools?.subagents?.default_model ?? "gpt-5.4-mini",
       },
     },
   };

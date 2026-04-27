@@ -28,7 +28,7 @@ import {
 import { formatSkillsList } from "./skills.js";
 import type { Command } from "./types.js";
 
-export async function executeCommand(
+async function executeCommand(
   command: Command,
   stdin: Readable,
   stderr: Writable,

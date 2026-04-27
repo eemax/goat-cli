@@ -383,7 +383,7 @@ describe("bash tool", () => {
   });
 });
 
-describe("patch and stub tools", () => {
+describe("patch tool", () => {
   test("applies structured patches", async () => {
     const context = await createContext();
     await writeFile(join(context.cwd, "note.txt"), "hello\nworld\n");
@@ -515,14 +515,5 @@ describe("patch and stub tools", () => {
 
     expect(result.ok).toBe(false);
     expect(result.ok ? null : result.error.message).toContain("at least one hunk");
-  });
-
-  test("returns explicit unimplemented failures for remaining stub tools", async () => {
-    const context = await createContext();
-    const result = await executeToolCall(context, ["subagents"], "subagents", {
-      action: "spawn",
-    });
-    expect(result.ok).toBe(false);
-    expect(result.ok ? null : result.error.code).toBe("UNIMPLEMENTED_IN_V1");
   });
 });

@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { normalize, relative, resolve } from "node:path";
-import { type Tool as AgentsTool, tool as agentsTool } from "@openai/agents";
-import { z } from "zod";
+import { toJSONSchema, z } from "zod";
 
 import { type ArtifactStore, createPreview, PREVIEW_CHAR_LIMIT } from "./artifacts.js";
 import { GoatError, toolError } from "./errors.js";
@@ -21,19 +20,6 @@ type ToolDefinition = {
   access: ToolAccessClass;
   schema: z.ZodTypeAny;
   handler: (context: ToolContext, input: unknown) => Promise<ToolEnvelope>;
-};
-
-export type ToolExecutionEvent = {
-  tool_call_id: string | null;
-  tool_name: string;
-  arguments: unknown;
-  duration_ms?: number;
-  envelope?: ToolEnvelope;
-};
-
-export type ToolExecutionObserver = {
-  onStart?: (event: ToolExecutionEvent) => void | Promise<void>;
-  onFinish?: (event: ToolExecutionEvent) => void | Promise<void>;
 };
 
 /**
@@ -188,79 +174,11 @@ const toolDefinitions: ToolDefinition[] = [
       .strict(),
     handler: (context, input) => runWebFetchTool(context, input),
   }),
-  defineTool({
-    id: "subagents",
-    description: "Stubbed subagents tool reserved for future CLI integration.",
-    access: "mutating",
-    schema: z
-      .object({
-        action: z.string().min(1),
-      })
-      .strict(),
-    handler: async () => unimplementedTool("subagents"),
-  }),
 ];
 
-function unimplementedTool(name: string): ToolEnvelope {
-  return {
-    ok: false,
-    summary: `${name} is not implemented in V1.`,
-    error: {
-      code: "UNIMPLEMENTED_IN_V1",
-      message: `${name} is not implemented in V1.`,
-      retryable: false,
-    },
-  };
-}
-
-function zodToJsonSchema(shape: z.ZodTypeAny): Record<string, unknown> {
-  if (shape instanceof z.ZodObject) {
-    const entries = Object.entries(shape.shape).map(([key, child]) => [key, zodToJsonSchema(child as z.ZodTypeAny)]);
-    return {
-      type: "object",
-      properties: Object.fromEntries(entries),
-      required: Object.keys(shape.shape).filter((key) => !(shape.shape[key] as z.ZodTypeAny).isOptional()),
-      additionalProperties: false,
-    };
-  }
-  if (shape instanceof z.ZodString) {
-    return { type: "string" };
-  }
-  if (shape instanceof z.ZodNumber) {
-    return { type: "number" };
-  }
-  if (shape instanceof z.ZodBoolean) {
-    return { type: "boolean" };
-  }
-  if (shape instanceof z.ZodArray) {
-    return {
-      type: "array",
-      items: zodToJsonSchema(shape.element as z.ZodTypeAny),
-    };
-  }
-  if (shape instanceof z.ZodEnum) {
-    return {
-      type: "string",
-      enum: [...shape.options],
-    };
-  }
-  if (shape instanceof z.ZodOptional || shape instanceof z.ZodDefault) {
-    return zodToJsonSchema(shape.unwrap() as z.ZodTypeAny);
-  }
-  if (shape instanceof z.ZodRecord) {
-    return {
-      type: "object",
-      additionalProperties: { type: "string" },
-    };
-  }
-  if (shape instanceof z.ZodUnion) {
-    const options = shape.options.map((option) => zodToJsonSchema(option as z.ZodTypeAny));
-    const enumValues = options.flatMap((option) => ("enum" in option && Array.isArray(option.enum) ? option.enum : []));
-    if (enumValues.length > 0) {
-      return { type: "string", enum: enumValues };
-    }
-  }
-  return { type: "string" };
+function providerToolParameters(schema: z.ZodTypeAny): Record<string, unknown> {
+  const { $schema: _schema, ...parameters } = toJSONSchema(schema) as Record<string, unknown>;
+  return parameters;
 }
 
 export function resolveToolPath(context: ToolContext, targetPath: string): string {
@@ -308,47 +226,8 @@ export function exportProviderTools(enabledTools: string[]): ProviderTool[] {
       name: tool.id,
       description: tool.description,
       strict: true,
-      parameters: zodToJsonSchema(tool.schema),
+      parameters: providerToolParameters(tool.schema),
     };
-  });
-}
-
-export function exportAgentsSdkTools(
-  enabledTools: string[],
-  context: ToolContext,
-  observer?: ToolExecutionObserver,
-): AgentsTool<ToolContext>[] {
-  return enabledTools.map((name) => {
-    const definition = toolRegistry.get(name);
-    if (!definition) {
-      throw toolError(`unknown tool \`${name}\``);
-    }
-
-    return agentsTool({
-      name: definition.id,
-      description: definition.description,
-      parameters: zodToJsonSchema(definition.schema) as never,
-      strict: true,
-      execute: async (input, _runContext, details) => {
-        const callId = details?.toolCall?.callId ?? null;
-        await observer?.onStart?.({
-          tool_call_id: callId,
-          tool_name: definition.id,
-          arguments: input,
-        });
-        const startedAt = performance.now();
-        const envelope = await executeToolCall(context, enabledTools, definition.id, input);
-        const durationMs = Number((performance.now() - startedAt).toFixed(1));
-        await observer?.onFinish?.({
-          tool_call_id: callId,
-          tool_name: definition.id,
-          arguments: input,
-          duration_ms: durationMs,
-          envelope,
-        });
-        return JSON.stringify(envelope);
-      },
-    });
   });
 }
 
@@ -429,7 +308,7 @@ export function toRelativeDisplayPath(context: ToolContext, absolutePath: string
   return relativePath && !relativePath.startsWith("..") ? relativePath : absolutePath;
 }
 
-export type ProcessResult = {
+type ProcessResult = {
   exitCode: number;
   stdout: string;
   stderr: string;

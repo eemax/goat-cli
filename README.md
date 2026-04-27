@@ -2,7 +2,7 @@
 
 A session-first, non-interactive agent harness CLI.
 
-Goat is a durable core for AI agent runs. It manages sessions, persists full audit trails, and executes tool-equipped agents through the OpenAI Agents SDK on top of the Responses API. Other interfaces -- shell scripts, local UIs, editors, remote supervisors -- can attach on top.
+Goat is a durable core for AI agent runs. It manages sessions, persists full audit trails, and executes tool-equipped agents through the OpenAI Responses API. Other interfaces -- shell scripts, local UIs, editors, remote supervisors -- can attach on top.
 
 ## Quick start
 
@@ -117,7 +117,7 @@ V1 ships with seven implemented tools:
 | `glob` | read-only | File pattern matching via `rg` |
 | `grep` | read-only | Regex/literal search via `rg` |
 
-`web_search` uses Exa, `web_fetch` uses the Defuddle CLI, and `subagents` is defined as a stub for future implementation.
+Optional web tools are also available: `web_search` uses Exa, and `web_fetch` uses the Defuddle CLI.
 
 See [docs/tools.md](docs/tools.md) for full schemas and behavior.
 

@@ -16,7 +16,7 @@ import type { ProviderClient, ProviderInputItem, ProviderTurnResult } from "./pr
 import type { ProviderTool, ProviderUsage, ToolEnvelope, TranscriptRecord } from "./types.js";
 import { nowIso } from "./utils.js";
 
-export type AgentLoopResult = {
+type AgentLoopResult = {
   final_text: string;
   usage: ProviderUsage | null;
   last_response_id: string | null;
